@@ -1,0 +1,29 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: eduquest
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - eduquest_db_data:/var/lib/postgresql/data
+      - ../database/migrations:/docker-entrypoint-initdb.d
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../infrastructure/Dockerfile.backend
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+volumes:
+  eduquest_db_data:
