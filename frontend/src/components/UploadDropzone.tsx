@@ -1,16 +1,27 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, FileText, Loader2, Plus, UploadCloud, XCircle } from "lucide-react";
+import { CheckCircle2, FileText, Loader2, Plus, Sparkles, UploadCloud, XCircle } from "lucide-react";
 import type { Subject } from "@/lib/api";
 
 type UploadState =
-  | { phase: "idle" }
   | { phase: "uploading" }
-  | { phase: "tracking"; pdfId: string; status: string; originalName: string }
+  | { phase: "tracking"; pdfId: string; status: string }
   | { phase: "error"; message: string };
 
+type TrackedUpload = {
+  id: string;
+  fileName: string;
+  state: UploadState;
+};
+
 const POLL_INTERVAL_MS = 3000;
+// Generous enough to survive a Render free-tier cold start (can take 30-60s+
+// to wake up) on top of the actual file upload.
+const UPLOAD_TIMEOUT_MS = 90_000;
+// Sentinel select value meaning "let the AI pipeline suggest the subject" —
+// distinct from any real subject UUID.
+const AUTO_DETECT = "__auto__";
 
 const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
   pending: { label: "Queued...", icon: Loader2, className: "text-zinc-500" },
@@ -21,26 +32,42 @@ const STATUS_META: Record<string, { label: string; icon: typeof Loader2; classNa
 
 export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
   const [localSubjects, setLocalSubjects] = useState(subjects);
-  const [subjectId, setSubjectId] = useState(subjects[0]?.id ?? "");
+  const [subjectId, setSubjectId] = useState(AUTO_DETECT);
   const [addingSubject, setAddingSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState("");
-  const [state, setState] = useState<UploadState>({ phase: "idle" });
+  const [uploads, setUploads] = useState<TrackedUpload[]>([]);
+  const [globalError, setGlobalError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadsRef = useRef<TrackedUpload[]>([]);
 
   useEffect(() => {
-    if (state.phase !== "tracking") return;
-    if (state.status === "extracted" || state.status === "failed") return;
+    uploadsRef.current = uploads;
+  }, [uploads]);
 
-    const id = setInterval(async () => {
-      const res = await fetch(`/api/pdfs/${state.pdfId}/status`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setState((prev) => (prev.phase === "tracking" ? { ...prev, status: data.status } : prev));
+  // A single persistent poller handles every in-flight upload at once, so
+  // uploading several files doesn't spin up one interval per file.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const toPoll = uploadsRef.current.filter(
+        (u): u is TrackedUpload & { state: { phase: "tracking"; pdfId: string; status: string } } =>
+          u.state.phase === "tracking" && u.state.status !== "extracted" && u.state.status !== "failed"
+      );
+      for (const u of toPoll) {
+        try {
+          const res = await fetch(`/api/pdfs/${u.state.pdfId}/status`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          setUploads((prev) =>
+            prev.map((x) => (x.id === u.id && x.state.phase === "tracking" ? { ...x, state: { ...x.state, status: data.status } } : x))
+          );
+        } catch {
+          // transient network error — the next poll tick will retry
+        }
+      }
     }, POLL_INTERVAL_MS);
-
-    return () => clearInterval(id);
-  }, [state]);
+    return () => clearInterval(interval);
+  }, []);
 
   async function handleAddSubject(e: React.FormEvent) {
     e.preventDefault();
@@ -52,7 +79,7 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
     });
     const data = await res.json();
     if (!res.ok) {
-      setState({ phase: "error", message: data.error || "Could not add subject." });
+      setGlobalError(data.error || "Could not add subject.");
       return;
     }
     setLocalSubjects((prev) => (prev.some((s) => s.id === data.id) ? prev : [...prev, data]));
@@ -61,61 +88,102 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
     setAddingSubject(false);
   }
 
-  async function handleFile(file: File) {
-    if (!subjectId) {
-      setState({ phase: "error", message: "Add or choose a subject first." });
-      return;
-    }
-    if (file.type !== "application/pdf") {
-      setState({ phase: "error", message: "Only PDF files are accepted." });
-      return;
-    }
-
-    setState({ phase: "uploading" });
+  async function uploadOne(file: File, uploadId: string) {
     const form = new FormData();
     form.append("file", file);
-    form.append("subject_id", subjectId);
+    if (subjectId !== AUTO_DETECT) form.append("subject_id", subjectId);
 
-    const res = await fetch("/api/pdfs/upload", { method: "POST", body: form });
-    const data = await res.json();
-    if (!res.ok) {
-      setState({ phase: "error", message: data.error || "Upload failed." });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+
+    try {
+      const res = await fetch("/api/pdfs/upload", { method: "POST", body: form, signal: controller.signal });
+      const data = await res.json();
+      if (!res.ok) {
+        setUploads((prev) =>
+          prev.map((u) => (u.id === uploadId ? { ...u, state: { phase: "error", message: data.error || "Upload failed." } } : u))
+        );
+        return;
+      }
+      setUploads((prev) =>
+        prev.map((u) => (u.id === uploadId ? { ...u, state: { phase: "tracking", pdfId: data.id, status: data.status } } : u))
+      );
+    } catch (err) {
+      const timedOut = err instanceof DOMException && err.name === "AbortError";
+      setUploads((prev) =>
+        prev.map((u) =>
+          u.id === uploadId
+            ? {
+                ...u,
+                state: {
+                  phase: "error",
+                  message: timedOut
+                    ? "Upload timed out — the server may be waking up from idle. Please try again."
+                    : "Upload failed — check your connection and try again.",
+                },
+              }
+            : u
+        )
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  function handleFiles(fileList: FileList) {
+    const files = Array.from(fileList);
+    const pdfFiles = files.filter((f) => f.type === "application/pdf");
+    if (pdfFiles.length === 0) {
+      setGlobalError("Only PDF files are accepted.");
       return;
     }
-    setState({ phase: "tracking", pdfId: data.id, status: data.status, originalName: data.original_name });
+    setGlobalError(null);
+    const newUploads: TrackedUpload[] = pdfFiles.map((file) => ({
+      id: crypto.randomUUID(),
+      fileName: file.name,
+      state: { phase: "uploading" },
+    }));
+    setUploads((prev) => [...newUploads, ...prev]);
+    newUploads.forEach((u, i) => uploadOne(pdfFiles[i], u.id));
   }
 
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
       <h3 className="mb-3 flex items-center gap-2 font-semibold text-zinc-700">
         <FileText className="h-4 w-4 text-indigo-500" strokeWidth={2.2} />
-        Upload a worksheet (PDF)
+        Upload worksheets (PDF)
       </h3>
 
-      <div className="mb-3 flex items-center gap-2">
-        {localSubjects.length > 0 && !addingSubject && (
+      {!addingSubject && (
+        <div className="mb-1 flex items-center gap-2">
           <select
             value={subjectId}
             onChange={(e) => setSubjectId(e.target.value)}
             className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
           >
+            <option value={AUTO_DETECT}>✨ Auto-detect subject</option>
             {localSubjects.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
               </option>
             ))}
           </select>
-        )}
-        {!addingSubject && (
           <button
+            title="Add a subject"
             onClick={() => setAddingSubject(true)}
-            className="flex shrink-0 items-center gap-1 rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 transition hover:border-indigo-300 hover:text-indigo-600"
+            className="flex shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 p-2 text-zinc-500 transition hover:border-indigo-300 hover:text-indigo-600"
           >
             <Plus className="h-4 w-4" strokeWidth={2.2} />
-            {localSubjects.length === 0 ? "Add a subject" : ""}
           </button>
-        )}
-      </div>
+        </div>
+      )}
+
+      {subjectId === AUTO_DETECT && !addingSubject && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-indigo-500">
+          <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
+          The subject and topics will be detected automatically from each file.
+        </p>
+      )}
 
       {addingSubject && (
         <form onSubmit={handleAddSubject} className="mb-3 flex gap-2">
@@ -149,8 +217,7 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
-          const file = e.dataTransfer.files?.[0];
-          if (file) handleFile(file);
+          if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
         }}
         onClick={() => inputRef.current?.click()}
         className={`flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center text-sm transition
@@ -160,41 +227,42 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
           ref={inputRef}
           type="file"
           accept="application/pdf"
+          multiple
           className="hidden"
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFile(file);
+            if (e.target.files?.length) handleFiles(e.target.files);
+            e.target.value = ""; // allow re-selecting the same file(s) again later
           }}
         />
-        {state.phase === "uploading" ? (
-          <>
-            <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
-            <span className="text-indigo-500">Uploading...</span>
-          </>
-        ) : (
-          <>
-            <UploadCloud className="h-6 w-6 text-zinc-400" strokeWidth={1.75} />
-            <span className="text-zinc-500">Drop a PDF here, or click to choose one.</span>
-          </>
-        )}
+        <UploadCloud className="h-6 w-6 text-zinc-400" strokeWidth={1.75} />
+        <span className="text-zinc-500">Drop one or more PDFs here, or click to choose.</span>
       </div>
 
-      {state.phase === "tracking" &&
-        (() => {
-          const meta = STATUS_META[state.status] ?? { label: state.status, icon: Loader2, className: "text-zinc-500" };
-          const StatusIcon = meta.icon;
-          return (
-            <div className="mt-3 flex items-start gap-2 rounded-lg bg-zinc-50 px-3 py-2.5 text-sm">
-              <StatusIcon className={`mt-0.5 h-4 w-4 shrink-0 ${meta.className} ${state.status !== "extracted" && state.status !== "failed" ? "animate-spin" : ""}`} />
-              <div>
-                <p className="font-medium text-zinc-700">{state.originalName}</p>
-                <p className={meta.className}>{meta.label}</p>
-              </div>
-            </div>
-          );
-        })()}
+      {globalError && <p className="mt-3 text-sm text-rose-500">{globalError}</p>}
 
-      {state.phase === "error" && <p className="mt-3 text-sm text-rose-500">{state.message}</p>}
+      {uploads.length > 0 && (
+        <ul className="mt-3 flex flex-col gap-2">
+          {uploads.map((u) => {
+            const meta =
+              u.state.phase === "tracking"
+                ? STATUS_META[u.state.status] ?? { label: u.state.status, icon: Loader2, className: "text-zinc-500" }
+                : u.state.phase === "uploading"
+                  ? { label: "Uploading...", icon: Loader2, className: "text-indigo-500" }
+                  : { label: u.state.message, icon: XCircle, className: "text-rose-500" };
+            const StatusIcon = meta.icon;
+            const spinning = u.state.phase === "uploading" || (u.state.phase === "tracking" && StatusIcon === Loader2);
+            return (
+              <li key={u.id} className="flex items-start gap-2 rounded-lg bg-zinc-50 px-3 py-2.5 text-sm">
+                <StatusIcon className={`mt-0.5 h-4 w-4 shrink-0 ${meta.className} ${spinning ? "animate-spin" : ""}`} />
+                <div>
+                  <p className="font-medium text-zinc-700">{u.fileName}</p>
+                  <p className={meta.className}>{meta.label}</p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

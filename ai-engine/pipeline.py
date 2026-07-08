@@ -40,6 +40,12 @@ class ExtractedQuestion:
     difficulty_guess: str  # "easy" | "medium" | "hard"
 
 
+@dataclass
+class ExtractionResult:
+    subject_guess: str  # document-level — one worksheet is assumed to belong to one subject
+    questions: list[ExtractedQuestion]
+
+
 def ocr_pdf(pdf_bytes: bytes, filename: str) -> str:
     """Submit the PDF to Mathpix's async PDF API, poll until done, return the markdown."""
     if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
@@ -77,10 +83,13 @@ def ocr_pdf(pdf_bytes: bytes, filename: str) -> str:
 
 
 EXTRACTION_SYSTEM_PROMPT = """You are an exam-parsing engine. Given raw OCR'd markdown from a
-math/science worksheet, split it into individual questions.
+math/science worksheet, first identify the overall subject/course the worksheet belongs to
+(e.g. "AP Calculus", "SAT Math", "Grade 8 Algebra" — short, matching how a course would be
+named in a school catalog), then split the content into individual questions.
 
 Respond with a JSON object of exactly this shape, no prose, no markdown fences:
 {
+  "subject_guess": "short subject/course name for the whole worksheet",
   "questions": [
     {
       "prompt_text": "plain-text version of the question",
@@ -109,7 +118,7 @@ def _parse_question(item: dict) -> ExtractedQuestion:
     )
 
 
-def extract_questions(ocr_text: str) -> list[ExtractedQuestion]:
+def extract_questions(ocr_text: str) -> ExtractionResult:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
 
@@ -123,10 +132,12 @@ def extract_questions(ocr_text: str) -> list[ExtractedQuestion]:
         ],
     )
     raw = json.loads(response.choices[0].message.content)
-    return [_parse_question(item) for item in raw["questions"]]
+    questions = [_parse_question(item) for item in raw["questions"]]
+    subject_guess = (raw.get("subject_guess") or "General").strip()
+    return ExtractionResult(subject_guess=subject_guess, questions=questions)
 
 
-def run_pipeline(pdf_bytes: bytes, filename: str) -> list[ExtractedQuestion]:
+def run_pipeline(pdf_bytes: bytes, filename: str) -> ExtractionResult:
     """Entry point called by the background job triggered from pdfs.upload_pdf."""
     ocr_text = ocr_pdf(pdf_bytes, filename)
     return extract_questions(ocr_text)

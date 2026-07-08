@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.supabase_client import get_supabase_admin
-from app.db.orm import AnswerKey, Pdf, Question, Topic
+from app.db.orm import AnswerKey, Pdf, Question, Subject, Topic
 from app.db.session import SessionLocal, get_db
 from app.models.schemas import PdfUploadOut
 from app.routers.auth import get_current_parent_id
@@ -53,7 +53,7 @@ def _ensure_bucket() -> None:
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile,
-    subject_id: UUID = Form(...),
+    subject_id: UUID | None = Form(None),
     db: AsyncSession = Depends(get_db),
     parent_id: UUID = Depends(get_current_parent_id),
 ):
@@ -102,28 +102,45 @@ async def pdf_status(
     return PdfUploadOut(id=pdf.id, status=pdf.status, original_name=pdf.original_name)
 
 
-async def _process_pdf(pdf_id: UUID, subject_id: UUID, pdf_bytes: bytes, filename: str) -> None:
+async def _process_pdf(pdf_id: UUID, subject_id: UUID | None, pdf_bytes: bytes, filename: str) -> None:
     """Runs after the response is sent, so it opens its own DB session —
-    the request's session is long gone by the time this executes."""
+    the request's session is long gone by the time this executes.
+
+    subject_id is None when the parent didn't pick one at upload time — in
+    that case the pipeline's own subject_guess resolves-or-creates one here,
+    the same dedup-by-name pattern already used for topics below."""
     async with SessionLocal() as db:
         pdf = await db.get(Pdf, pdf_id)
         pdf.status = "processing"
         await db.commit()
 
         try:
-            extracted = await asyncio.to_thread(ingestion_pipeline.run_pipeline, pdf_bytes, filename)
+            result = await asyncio.to_thread(ingestion_pipeline.run_pipeline, pdf_bytes, filename)
 
-            for eq in extracted:
+            resolved_subject_id = subject_id
+            if resolved_subject_id is None:
+                subject_name = result.subject_guess.strip()
+                subject = (
+                    await db.execute(select(Subject).where(func.lower(Subject.name) == subject_name.lower()))
+                ).scalar_one_or_none()
+                if subject is None:
+                    subject = Subject(name=subject_name)
+                    db.add(subject)
+                    await db.flush()
+                resolved_subject_id = subject.id
+                pdf.subject_id = resolved_subject_id
+
+            for eq in result.questions:
                 topic = (
                     await db.execute(
                         select(Topic).where(
-                            Topic.subject_id == subject_id,
+                            Topic.subject_id == resolved_subject_id,
                             func.lower(Topic.name) == eq.topic_guess.strip().lower(),
                         )
                     )
                 ).scalar_one_or_none()
                 if topic is None:
-                    topic = Topic(subject_id=subject_id, name=eq.topic_guess.strip())
+                    topic = Topic(subject_id=resolved_subject_id, name=eq.topic_guess.strip())
                     db.add(topic)
                     await db.flush()
 
