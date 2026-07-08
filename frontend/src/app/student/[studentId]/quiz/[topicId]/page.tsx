@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
@@ -13,8 +14,9 @@ export default async function QuizPage({
   const token = await getStudentToken();
   if (!token) redirect("/student/login");
 
+  let me: Awaited<ReturnType<typeof api.getMyProfile>>;
   try {
-    const me = await api.getMyProfile(token);
+    me = await api.getMyProfile(token);
     if (me.id !== studentId) redirect(`/student/${me.id}/quiz/${topicId}`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) redirect("/student/login");
@@ -23,10 +25,19 @@ export default async function QuizPage({
 
   return (
     <div className="mx-auto max-w-lg px-6 py-10">
-      <Link href={`/student/${studentId}`} className="mb-4 inline-block text-sm text-purple-400">
-        ← Back to quests
+      <Link
+        href={`/student/${studentId}`}
+        className="mb-4 inline-flex items-center gap-1 text-sm font-medium text-purple-500 hover:text-purple-700"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to quests
       </Link>
-      <QuizRunner studentId={studentId} topicId={topicId} />
+      <QuizRunner
+        studentId={studentId}
+        topicId={topicId}
+        initialXpTotal={me.xp_total}
+        initialStreakDays={me.streak_days}
+      />
     </div>
   );
 }

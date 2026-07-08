@@ -1,17 +1,36 @@
+import { AlertCircle, ChevronRight, Sparkle, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import type { MasteryStat, Topic } from "@/lib/api";
 
 function masteryStyle(stat: MasteryStat | undefined) {
   if (!stat || stat.total_first_attempts === 0) {
-    return { label: "New", ring: "ring-zinc-300", dot: "bg-zinc-300", text: "text-zinc-500" };
+    return { label: "New", ring: "ring-zinc-300", dot: "bg-zinc-300", text: "text-zinc-500", icon: null };
   }
   if (stat.accuracy_rate >= 80) {
-    return { label: `${stat.accuracy_rate}% mastered`, ring: "ring-emerald-400", dot: "bg-emerald-500", text: "text-emerald-600" };
+    return {
+      label: `${stat.accuracy_rate}% mastered`,
+      ring: "ring-emerald-400",
+      dot: "bg-emerald-500",
+      text: "text-emerald-600",
+      icon: Sparkle,
+    };
   }
   if (stat.accuracy_rate >= 50) {
-    return { label: `${stat.accuracy_rate}% practicing`, ring: "ring-amber-400", dot: "bg-amber-500", text: "text-amber-600" };
+    return {
+      label: `${stat.accuracy_rate}% practicing`,
+      ring: "ring-amber-400",
+      dot: "bg-amber-500",
+      text: "text-amber-600",
+      icon: TrendingUp,
+    };
   }
-  return { label: `${stat.accuracy_rate}% needs work`, ring: "ring-rose-400", dot: "bg-rose-500", text: "text-rose-600" };
+  return {
+    label: `${stat.accuracy_rate}% needs work`,
+    ring: "ring-rose-400",
+    dot: "bg-rose-500",
+    text: "text-rose-600",
+    icon: AlertCircle,
+  };
 }
 
 export default function ProgressTrail({
@@ -35,6 +54,7 @@ export default function ProgressTrail({
     <ol className="flex flex-col gap-3">
       {topics.map((topic, i) => {
         const style = masteryStyle(masteryByTopic.get(topic.id));
+        const StatusIcon = style.icon;
         return (
           <li key={topic.id}>
             <Link
@@ -46,9 +66,12 @@ export default function ProgressTrail({
               </span>
               <span className="flex-1">
                 <span className="block font-semibold text-zinc-800">{topic.name}</span>
-                <span className={`block text-xs font-medium ${style.text}`}>{style.label}</span>
+                <span className={`flex items-center gap-1 text-xs font-medium ${style.text}`}>
+                  {StatusIcon && <StatusIcon className="h-3 w-3" strokeWidth={2.5} />}
+                  {style.label}
+                </span>
               </span>
-              <span className="text-purple-400">→</span>
+              <ChevronRight className="h-5 w-5 text-purple-400" strokeWidth={2.2} />
             </Link>
           </li>
         );

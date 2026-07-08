@@ -13,7 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "EduQuestAI",
+  title: {
+    default: "EduQuestAI",
+    template: "%s · EduQuestAI",
+  },
   description: "Adaptive practice for your family's worksheets.",
 };
 

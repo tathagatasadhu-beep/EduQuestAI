@@ -12,14 +12,14 @@ prior attempts for this student+question), and updates the review queue —
 resetting/inserting on a miss, incrementing (and resolving at 2 in a row) on
 a correct retry.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.orm import AnswerKey, Attempt, Question, ReviewQueue
+from app.db.orm import AnswerKey, Attempt, Question, ReviewQueue, Student
 from app.db.session import get_db
 from app.models.schemas import AttemptResult, AttemptSubmit, QuestionOut
 from app.routers.auth import get_current_student
@@ -29,6 +29,26 @@ router = APIRouter()
 # A missed question won't be re-served until this much time has passed, so a
 # student can't rack up "2 correct in a row" by just answering it twice back-to-back.
 REVIEW_COOLDOWN = timedelta(minutes=30)
+
+XP_PER_CORRECT = 10
+XP_REVIEW_RESOLVED_BONUS = 15
+
+
+def _apply_streak(student: Student, prior_last_attempt_at: datetime | None, today: date) -> None:
+    """Daily-practice streak, derived from attempt history rather than a
+    separately-maintained 'last active' column. Any practice counts — this
+    runs once per submit, using the most recent attempt *before* the one
+    just recorded, so it only advances on the first attempt of a new day."""
+    if prior_last_attempt_at is None:
+        student.streak_days = 1
+        return
+    prior_date = prior_last_attempt_at.date()
+    if prior_date == today:
+        return  # already practiced today — streak unchanged
+    if prior_date == today - timedelta(days=1):
+        student.streak_days += 1
+    else:
+        student.streak_days = 1  # gap of 2+ days — streak resets
 
 
 @router.get("/next-question", response_model=QuestionOut)
@@ -110,6 +130,10 @@ async def submit_answer(
     if payload.student_id != student["student_id"]:
         raise HTTPException(status_code=403, detail="Cannot submit an attempt for another student.")
 
+    student_row = await db.get(Student, payload.student_id)
+    if student_row is None:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
     question = (
         await db.execute(select(Question).where(Question.id == payload.question_id))
     ).scalar_one_or_none()
@@ -137,6 +161,10 @@ async def submit_answer(
         )
     ).scalar_one()
 
+    prior_last_attempt_at = (
+        await db.execute(select(func.max(Attempt.answered_at)).where(Attempt.student_id == payload.student_id))
+    ).scalar_one()
+
     db.add(
         Attempt(
             student_id=payload.student_id,
@@ -156,13 +184,16 @@ async def submit_answer(
         )
     ).scalar_one_or_none()
 
+    xp_awarded = 0
     added_to_review_queue = False
     if is_correct:
+        xp_awarded += XP_PER_CORRECT
         if review_row is not None and not review_row.resolved:
             review_row.consecutive_correct += 1
             review_row.last_seen_at = now
             if review_row.consecutive_correct >= 2:
                 review_row.resolved = True
+                xp_awarded += XP_REVIEW_RESOLVED_BONUS
     else:
         added_to_review_queue = True
         if review_row is not None:
@@ -180,6 +211,9 @@ async def submit_answer(
                 )
             )
 
+    student_row.xp_total += xp_awarded
+    _apply_streak(student_row, prior_last_attempt_at, now.date())
+
     await db.commit()
 
     return AttemptResult(
@@ -187,4 +221,7 @@ async def submit_answer(
         correct_answer=correct_answer,
         explanation=None,
         added_to_review_queue=added_to_review_queue,
+        xp_awarded=xp_awarded,
+        xp_total=student_row.xp_total,
+        streak_days=student_row.streak_days,
     )

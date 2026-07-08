@@ -83,6 +83,9 @@ export type AttemptResult = {
   correct_answer: string;
   explanation: string | null;
   added_to_review_queue: boolean;
+  xp_awarded: number;
+  xp_total: number;
+  streak_days: number;
 };
 
 export type PdfUploadOut = {
@@ -130,6 +133,13 @@ export const api = {
 
   // --- subjects/topics (public library) ---
   listSubjects: () => request<Subject[]>("/api/subjects"),
+  createSubject: (token: string, data: { name: string; description?: string }) =>
+    request<Subject>("/api/subjects", {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   listTopics: (subjectId: string) => request<Topic[]>(`/api/subjects/${subjectId}/topics`),
 
   // --- quiz ---

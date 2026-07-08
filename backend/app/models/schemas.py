@@ -59,6 +59,11 @@ class StudentAuthToken(BaseModel):
     student: StudentOut
 
 
+class SubjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
 class SubjectOut(BaseModel):
     id: UUID
     name: str
@@ -93,6 +98,9 @@ class AttemptResult(BaseModel):
     correct_answer: str
     explanation: Optional[str] = None
     added_to_review_queue: bool
+    xp_awarded: int = 0
+    xp_total: int
+    streak_days: int
 
 
 class MasteryStat(BaseModel):
