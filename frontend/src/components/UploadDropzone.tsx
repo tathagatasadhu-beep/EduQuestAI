@@ -11,6 +11,9 @@ type UploadState =
   | { phase: "error"; message: string };
 
 const POLL_INTERVAL_MS = 3000;
+// Generous enough to survive a Render free-tier cold start (can take 30-60s+
+// to wake up) on top of the actual file upload.
+const UPLOAD_TIMEOUT_MS = 90_000;
 
 const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
   pending: { label: "Queued...", icon: Loader2, className: "text-zinc-500" },
@@ -33,10 +36,14 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
     if (state.status === "extracted" || state.status === "failed") return;
 
     const id = setInterval(async () => {
-      const res = await fetch(`/api/pdfs/${state.pdfId}/status`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setState((prev) => (prev.phase === "tracking" ? { ...prev, status: data.status } : prev));
+      try {
+        const res = await fetch(`/api/pdfs/${state.pdfId}/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setState((prev) => (prev.phase === "tracking" ? { ...prev, status: data.status } : prev));
+      } catch {
+        // transient network error — the next poll tick will retry
+      }
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(id);
@@ -76,13 +83,28 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
     form.append("file", file);
     form.append("subject_id", subjectId);
 
-    const res = await fetch("/api/pdfs/upload", { method: "POST", body: form });
-    const data = await res.json();
-    if (!res.ok) {
-      setState({ phase: "error", message: data.error || "Upload failed." });
-      return;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+
+    try {
+      const res = await fetch("/api/pdfs/upload", { method: "POST", body: form, signal: controller.signal });
+      const data = await res.json();
+      if (!res.ok) {
+        setState({ phase: "error", message: data.error || "Upload failed." });
+        return;
+      }
+      setState({ phase: "tracking", pdfId: data.id, status: data.status, originalName: data.original_name });
+    } catch (err) {
+      const timedOut = err instanceof DOMException && err.name === "AbortError";
+      setState({
+        phase: "error",
+        message: timedOut
+          ? "Upload timed out — the server may be waking up from idle. Please try again."
+          : "Upload failed — check your connection and try again.",
+      });
+    } finally {
+      clearTimeout(timeoutId);
     }
-    setState({ phase: "tracking", pdfId: data.id, status: data.status, originalName: data.original_name });
   }
 
   return (
