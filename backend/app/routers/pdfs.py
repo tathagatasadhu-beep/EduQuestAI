@@ -271,6 +271,7 @@ async def _process_pdf(pdf_id: UUID, subject_id: UUID | None, pdf_bytes: bytes, 
                     )
 
             pdf.status = "extracted"
+            pdf.ocr_text = result.ocr_text
             await db.commit()
         except Exception as exc:
             await db.rollback()

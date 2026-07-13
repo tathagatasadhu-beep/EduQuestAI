@@ -16,10 +16,13 @@ from sqlalchemy import select, func, cast, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.orm import Student, StudentAssignment, Subject, Attempt, Question, Topic
+from app.db.orm import ReviewQueue, Student, StudentAssignment, Subject, Attempt, Question, Topic
 from app.models.schemas import (
+    AssignedSubjectOut,
+    AssignedTopicOut,
     AssignmentCreate,
     AssignmentOut,
+    BadgeOut,
     LoginCodeOut,
     MasteryStat,
     StudentCreate,
@@ -64,6 +67,80 @@ async def _mastery_for_student(db: AsyncSession, student_id: UUID) -> list[Maste
             if r.total_first_attempts else 0.0,
         )
         for r in rows
+    ]
+
+
+async def _resolve_assigned_subjects(db: AsyncSession, student_id: UUID) -> list[tuple[Subject, list[Topic]]]:
+    """A `topic_id=null` assignment row means "whole subject" — expands to every
+    topic under it. A subject with any specific-topic rows only includes those
+    topics, even if a whole-subject row doesn't also exist for it."""
+    rows = (
+        await db.execute(select(StudentAssignment).where(StudentAssignment.student_id == student_id))
+    ).scalars().all()
+    if not rows:
+        return []
+
+    subject_ids = {r.subject_id for r in rows}
+    whole_subject_ids = {r.subject_id for r in rows if r.topic_id is None}
+    specific_by_subject: dict[UUID, set[UUID]] = {}
+    for r in rows:
+        if r.topic_id is not None:
+            specific_by_subject.setdefault(r.subject_id, set()).add(r.topic_id)
+
+    subjects = (await db.execute(select(Subject).where(Subject.id.in_(subject_ids)))).scalars().all()
+    all_topics = (
+        await db.execute(
+            select(Topic).where(Topic.subject_id.in_(subject_ids)).order_by(Topic.sort_order, Topic.name)
+        )
+    ).scalars().all()
+
+    result = []
+    for subject in subjects:
+        if subject.id in whole_subject_ids:
+            topics = [t for t in all_topics if t.subject_id == subject.id]
+        else:
+            allowed = specific_by_subject.get(subject.id, set())
+            topics = [t for t in all_topics if t.subject_id == subject.id and t.id in allowed]
+        result.append((subject, topics))
+    result.sort(key=lambda pair: (pair[0].grade_level or "", pair[0].name))
+    return result
+
+
+async def _badges_for_student(db: AsyncSession, student: Student) -> list[BadgeOut]:
+    mastery = await _mastery_for_student(db, student.id)
+    mastery_by_topic = {m.topic_id: m for m in mastery}
+
+    has_any_attempt = (
+        await db.execute(select(Attempt.id).where(Attempt.student_id == student.id).limit(1))
+    ).scalar_one_or_none() is not None
+    has_resolved_review = (
+        await db.execute(
+            select(ReviewQueue.id).where(ReviewQueue.student_id == student.id, ReviewQueue.resolved.is_(True)).limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    topic_mastered = any(m.total_first_attempts > 0 and m.accuracy_rate >= 80 for m in mastery)
+
+    assigned = await _resolve_assigned_subjects(db, student.id)
+    subject_champion = False
+    for _subject, topics in assigned:
+        if not topics:
+            continue
+        stats = [mastery_by_topic.get(t.id) for t in topics]
+        if all(s is not None and s.total_first_attempts > 0 and s.accuracy_rate >= 80 for s in stats):
+            subject_champion = True
+            break
+
+    level = student.xp_total // 500 + 1
+
+    return [
+        BadgeOut(id="first_quest", name="First Quest", description="Answer your first question", earned=has_any_attempt),
+        BadgeOut(id="streak_starter", name="Streak Starter", description="Practice 3 days in a row", earned=student.streak_days >= 3),
+        BadgeOut(id="streak_master", name="Streak Master", description="Practice 7 days in a row", earned=student.streak_days >= 7),
+        BadgeOut(id="topic_master", name="Topic Master", description="Reach 80% mastery in any topic", earned=topic_mastered),
+        BadgeOut(id="subject_champion", name="Subject Champion", description="Master every topic in one of your subjects", earned=subject_champion),
+        BadgeOut(id="comeback_kid", name="Comeback Kid", description="Fix a missed question by answering it right twice", earned=has_resolved_review),
+        BadgeOut(id="level_5", name="Level 5", description="Reach Level 5", earned=level >= 5),
+        BadgeOut(id="level_10", name="Level 10", description="Reach Level 10", earned=level >= 10),
     ]
 
 
@@ -140,6 +217,36 @@ async def get_my_mastery(
     student: dict = Depends(get_current_student),
 ):
     return await _mastery_for_student(db, student["student_id"])
+
+
+@router.get("/me/assigned-subjects", response_model=list[AssignedSubjectOut])
+async def get_my_assigned_subjects(
+    db: AsyncSession = Depends(get_db),
+    student: dict = Depends(get_current_student),
+):
+    """Populates "My Subjects" and the "Practice" tab — a parent-assigned
+    subject/topic subset, not the full library."""
+    resolved = await _resolve_assigned_subjects(db, student["student_id"])
+    return [
+        AssignedSubjectOut(
+            id=subject.id,
+            name=subject.name,
+            grade_level=subject.grade_level,
+            topics=[AssignedTopicOut(id=t.id, name=t.name, sort_order=t.sort_order) for t in topics],
+        )
+        for subject, topics in resolved
+    ]
+
+
+@router.get("/me/badges", response_model=list[BadgeOut])
+async def get_my_badges(
+    db: AsyncSession = Depends(get_db),
+    student: dict = Depends(get_current_student),
+):
+    s = await db.get(Student, student["student_id"])
+    if s is None:
+        raise HTTPException(status_code=404, detail="Student not found.")
+    return await _badges_for_student(db, s)
 
 
 @router.get("/{student_id}/mastery", response_model=list[MasteryStat])
@@ -274,3 +381,13 @@ async def delete_assignment(
         raise HTTPException(status_code=404, detail="Assignment not found.")
     await db.delete(assignment)
     await db.commit()
+
+
+@router.get("/{student_id}/badges", response_model=list[BadgeOut])
+async def get_student_badges(
+    student_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    student = await _get_owned_student_or_404(db, student_id, parent_id)
+    return await _badges_for_student(db, student)

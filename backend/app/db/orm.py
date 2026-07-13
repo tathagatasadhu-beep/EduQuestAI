@@ -100,6 +100,7 @@ class Pdf(Base):
     content_type: Mapped[str] = mapped_column(String, default="practice")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime, server_default=func.now())
 
 

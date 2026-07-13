@@ -15,7 +15,7 @@ load_dotenv()  # local dev only — Render sets real env vars directly in produc
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth, students, subjects, pdfs, quiz, review_queue
+from app.routers import auth, students, subjects, pdfs, quiz, review_queue, tutor
 
 app = FastAPI(
     title="EduQuestAI API",
@@ -38,6 +38,7 @@ app.include_router(subjects.router, prefix="/api/subjects", tags=["subjects"])
 app.include_router(pdfs.router, prefix="/api/pdfs", tags=["pdfs"])
 app.include_router(quiz.router, prefix="/api/quiz", tags=["quiz"])
 app.include_router(review_queue.router, prefix="/api/review-queue", tags=["review-queue"])
+app.include_router(tutor.router, prefix="/api/tutor", tags=["tutor"])
 
 
 @app.get("/api/health")

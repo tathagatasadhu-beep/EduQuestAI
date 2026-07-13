@@ -44,6 +44,7 @@ class ExtractedQuestion:
 class ExtractionResult:
     subject_guess: str  # document-level — one worksheet is assumed to belong to one subject
     questions: list[ExtractedQuestion]
+    ocr_text: str  # raw Mathpix markdown — persisted so the AI tutor can ground answers in it
 
 
 def ocr_pdf(pdf_bytes: bytes, filename: str) -> str:
@@ -134,7 +135,7 @@ def extract_questions(ocr_text: str) -> ExtractionResult:
     raw = json.loads(response.choices[0].message.content)
     questions = [_parse_question(item) for item in raw["questions"]]
     subject_guess = (raw.get("subject_guess") or "General").strip()
-    return ExtractionResult(subject_guess=subject_guess, questions=questions)
+    return ExtractionResult(subject_guess=subject_guess, questions=questions, ocr_text=ocr_text)
 
 
 def run_pipeline(pdf_bytes: bytes, filename: str) -> ExtractionResult:

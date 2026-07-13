@@ -182,3 +182,38 @@ class AssignmentOut(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+
+
+class AssignedTopicOut(BaseModel):
+    id: UUID
+    name: str
+    sort_order: int = 0
+
+
+class AssignedSubjectOut(BaseModel):
+    id: UUID
+    name: str
+    grade_level: Optional[str] = None
+    topics: list[AssignedTopicOut]
+
+
+class BadgeOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    earned: bool
+
+
+class TutorChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class TutorChatRequest(BaseModel):
+    subject_id: UUID
+    message: str
+    history: list[TutorChatMessage] = []
+
+
+class TutorChatResponse(BaseModel):
+    reply: str

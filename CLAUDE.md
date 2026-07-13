@@ -67,13 +67,23 @@ assuming anything is a stub.
   `NEXT_PUBLIC_SUPABASE_ANON_KEY` now exist as frontend env vars (anon key is meant to be public).
 - **Login-code regeneration** — `POST /api/students/{id}/login-code/regenerate` (parent-driven; students have
   no self-service "forgot code" since they don't have email/password).
+- **Student nav + AI tutor + badges** (Phase 2, added 2026-07-13) — the student side is now a real nav
+  (`frontend/src/app/student/[studentId]/layout.tsx` + `StudentNav.tsx`: Home / My Subjects / Practice / Badge
+  / Help), not a single page. **My Subjects** (`subjects/page.tsx`) reads Phase 1's `student_assignments` via
+  `GET /me/assigned-subjects`; opening a subject (`subjects/[subjectId]/page.tsx`) shows an AI tutor chat
+  (`TutorChat.tsx` → `POST /api/tutor/chat` → `tutor.py`) grounded in that subject's `content_type='theory'`
+  PDFs, falling back to OpenAI's built-in `web_search` tool when the worksheets don't cover the question —
+  see the system prompt in `tutor.py` for the exact grounding/fallback instructions. **Practice** is a flat
+  shortcut across every assigned topic (deliberately separate from My Subjects' guided flow — the existing
+  `QuizRunner`/`QuestionCard` practice UI itself is unchanged, Phase 2 only changed how it's reached). Chat
+  history is **session-only** (round-tripped from the client each turn, no server-side storage) — see
+  `tutor.py`'s docstring. **Badges** are computed on read (`students.py::_badges_for_student`), never stored —
+  same pattern as `level` (`XPBar.tsx::levelForXp`), so there's no backfill problem or second source of truth.
+  Required upgrading `openai` from `1.51.0` to `2.45.0` (the pinned version predated the Responses API
+  entirely — `client.responses` didn't exist).
 
-### What's still missing (confirmed via a full feature audit against the user's spec, 2026-07-08; re-checked 2026-07-12)
+### What's still missing (confirmed via a full feature audit against the user's spec, 2026-07-08; re-checked 2026-07-13)
 
-- **AI tutor** — not built at all. No chat/explain-this-question feature exists anywhere. This is Phase 2.
-- **Student nav redesign** (Home / My Subjects / Practice / Badge / Help) — also Phase 2; the student side is
-  still the single-page dashboard at `frontend/src/app/student/[studentId]/page.tsx`. Phase 2 will consume the
-  `student_assignments` data built in Phase 1 to populate "My Subjects."
 - **Timed quizzes** — no timer/time-limit concept anywhere in the quiz engine.
 - **Parent approval workflow** — the spec's PDF workflow has a "Parent Review" gate before topics/questions
   become usable; ours publishes immediately after extraction. No approve/reject UI exists (library management
@@ -82,8 +92,12 @@ assuming anything is a stub.
   never populated (the pipeline doesn't crop/save an image, only OCR text/LaTeX); no `subtopic` or `tags`
   concept exists. `explanation` on `AttemptResult` is intentionally always `None` — matches the spec's own
   "(future)" marker, not a gap.
-- **Gamification extras** — XP and streaks work; no badges, levels-as-rewards, or leaderboards exist beyond
-  the level number derived from XP. Badges are planned for Phase 2.
+- **Gamification extras** — XP, streaks, and 8 computed badges (`students.py::_badges_for_student`) all work;
+  no leaderboards exist.
+- **Theory PDFs produce no topics/questions** — confirmed during Phase 2 testing: the extraction pipeline only
+  ever creates `Topic`/`Question` rows from content it can parse into Q&A pairs, so a pure-explanation PDF
+  (uploaded as `content_type='theory'`) correctly yields zero questions. This is expected, not a bug — theory
+  content is grounded into the AI tutor chat via `Pdf.ocr_text` instead, independent of the topic structure.
 - **Known extraction-quality issue** (not a code bug, an LLM-output gap): multi-part questions with no single
   canonical answer (e.g. "a. 6x  b. -10x  c. x-5") sometimes come back from the extraction prompt with zero
   answer options — those questions get no `answer_keys` row, so any student attempt on them always grades as
@@ -166,11 +180,13 @@ its exact env-var list is now superseded by the "Deployment gotchas" section abo
 the connection pooler requirement or that Vercel only needs `BACKEND_URL`). Follow this file's gotchas section
 over `DEPLOY.md` where they conflict.
 
-**Not yet applied to production** (as of the Phase 1 library-management work, 2026-07-12) — do these before
-that code reaches Render/Vercel:
-- Run `database/migrations/002_library_management.sql` against the production Supabase project (Supabase SQL
-  editor, same as `001_init.sql` was — there's no Alembic).
+**Not yet applied to production** (as of the Phase 1/2 work, 2026-07-12/13) — do these before that code reaches
+Render/Vercel:
+- Run `database/migrations/002_library_management.sql` **and** `003_ai_tutor.sql` against the production
+  Supabase project (Supabase SQL editor, same as `001_init.sql` was — there's no Alembic).
 - Add `FRONTEND_URL` to Render's env vars (the production frontend origin, for the password-reset redirect
   link).
 - Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to Vercel's env vars (see the
   password-reset note above for why these are needed despite the "browser never talks to Supabase" rule).
+- Confirm Render picks up the `openai==2.45.0` bump in `backend/requirements.txt` on next deploy (Phase 2's
+  AI tutor needs the Responses API, which `1.51.0` didn't have).

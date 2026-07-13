@@ -66,6 +66,11 @@ export type Assignment = {
   created_at: string;
 };
 
+export type AssignedTopic = { id: string; name: string; sort_order: number };
+export type AssignedSubject = { id: string; name: string; grade_level: string | null; topics: AssignedTopic[] };
+export type Badge = { id: string; name: string; description: string; earned: boolean };
+export type TutorChatMessage = { role: "user" | "assistant"; content: string };
+
 export type MasteryStat = {
   topic_id: string;
   topic_name: string;
@@ -175,6 +180,9 @@ export const api = {
   // --- students (self-scoped) ---
   getMyProfile: (token: string) => request<Student>("/api/students/me", { token }),
   getMyMastery: (token: string) => request<MasteryStat[]>("/api/students/me/mastery", { token }),
+  getMyAssignedSubjects: (token: string) =>
+    request<AssignedSubject[]>("/api/students/me/assigned-subjects", { token }),
+  getMyBadges: (token: string) => request<Badge[]>("/api/students/me/badges", { token }),
 
   // --- subjects/topics (public library) ---
   listSubjects: () => request<Subject[]>("/api/subjects"),
@@ -264,6 +272,15 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deletePdf: (token: string, pdfId: string) => request<void>(`/api/pdfs/${pdfId}`, { method: "DELETE", token }),
+
+  // --- tutor chat ---
+  tutorChat: (token: string, data: { subject_id: string; message: string; history: TutorChatMessage[] }) =>
+    request<{ reply: string }>("/api/tutor/chat", {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
 
   // --- auth: password reset ---
   forgotPassword: (email: string) =>
