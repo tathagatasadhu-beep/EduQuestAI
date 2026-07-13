@@ -41,6 +41,15 @@ class StudentCreate(BaseModel):
     grade_level: Optional[str] = None
 
 
+class StudentUpdate(BaseModel):
+    display_name: Optional[str] = None
+    grade_level: Optional[str] = None
+
+
+class LoginCodeOut(BaseModel):
+    login_code: str
+
+
 class StudentOut(BaseModel):
     id: UUID
     display_name: str
@@ -62,17 +71,40 @@ class StudentAuthToken(BaseModel):
 class SubjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    grade_level: Optional[str] = None
+
+
+class SubjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    grade_level: Optional[str] = None
 
 
 class SubjectOut(BaseModel):
     id: UUID
     name: str
     description: Optional[str] = None
+    grade_level: Optional[str] = None
+    sort_order: int = 0
+
+
+class ReorderItem(BaseModel):
+    id: UUID
+    sort_order: int
 
 
 class Topic(BaseModel):
     id: UUID
     subject_id: UUID
+    name: str
+    sort_order: int = 0
+
+
+class TopicCreate(BaseModel):
+    name: str
+
+
+class TopicUpdate(BaseModel):
     name: str
 
 
@@ -114,3 +146,39 @@ class PdfUploadOut(BaseModel):
     id: UUID
     status: Literal["pending", "processing", "extracted", "failed"]
     original_name: str
+    content_type: Literal["theory", "practice"] = "practice"
+    error_message: Optional[str] = None
+
+
+class PdfOut(BaseModel):
+    id: UUID
+    original_name: str
+    status: Literal["pending", "processing", "extracted", "failed"]
+    error_message: Optional[str] = None
+    content_type: Literal["theory", "practice"]
+    subject_id: Optional[UUID] = None
+    subject_name: Optional[str] = None
+    question_count: int
+    uploaded_at: datetime
+
+
+class PdfUpdate(BaseModel):
+    content_type: Literal["theory", "practice"]
+
+
+class AssignmentCreate(BaseModel):
+    subject_id: UUID
+    topic_id: Optional[UUID] = None
+
+
+class AssignmentOut(BaseModel):
+    id: UUID
+    subject_id: UUID
+    subject_name: str
+    topic_id: Optional[UUID] = None
+    topic_name: Optional[str] = None
+    created_at: datetime
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr

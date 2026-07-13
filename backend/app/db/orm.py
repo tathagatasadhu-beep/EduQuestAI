@@ -65,6 +65,8 @@ class Subject(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grade_level: Mapped[str | None] = mapped_column(String, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Topic(Base):
@@ -95,6 +97,9 @@ class Pdf(Base):
     original_name: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="pending")
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[str] = mapped_column(String, default="practice")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime, server_default=func.now())
 
 
@@ -108,6 +113,7 @@ class Question(Base):
     image_path: Mapped[str | None] = mapped_column(String, nullable=True)
     difficulty: Mapped[str | None] = mapped_column(String, nullable=True)
     question_type: Mapped[str] = mapped_column(String, default="multiple_choice")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class AnswerKey(Base):
@@ -127,4 +133,15 @@ class ReviewQueue(Base):
     consecutive_correct: Mapped[int] = mapped_column(Integer, default=0)
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, server_default=func.now())
+
+
+class StudentAssignment(Base):
+    __tablename__ = "student_assignments"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"))
+    topic_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("topics.id", ondelete="CASCADE"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, server_default=func.now())

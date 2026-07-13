@@ -67,6 +67,7 @@ async def next_question(
             ReviewQueue.student_id == student_id,
             ReviewQueue.resolved.is_(False),
             Question.topic_id == topic_id,
+            Question.is_active.is_(True),
             or_(ReviewQueue.last_seen_at.is_(None), ReviewQueue.last_seen_at < due_cutoff),
         )
         .order_by(ReviewQueue.last_seen_at.asc().nulls_first())
@@ -78,7 +79,7 @@ async def next_question(
         attempted_ids = select(Attempt.question_id).where(Attempt.student_id == student_id)
         fresh_stmt = (
             select(Question)
-            .where(Question.topic_id == topic_id, Question.id.notin_(attempted_ids))
+            .where(Question.topic_id == topic_id, Question.is_active.is_(True), Question.id.notin_(attempted_ids))
             .order_by(func.random())
             .limit(1)
         )
@@ -88,7 +89,7 @@ async def next_question(
         stalest_stmt = (
             select(Question)
             .join(Attempt, Attempt.question_id == Question.id)
-            .where(Question.topic_id == topic_id, Attempt.student_id == student_id)
+            .where(Question.topic_id == topic_id, Question.is_active.is_(True), Attempt.student_id == student_id)
             .group_by(Question.id)
             .order_by(func.max(Attempt.answered_at).asc())
             .limit(1)

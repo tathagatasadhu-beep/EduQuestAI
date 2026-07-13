@@ -16,11 +16,29 @@ from sqlalchemy import select, func, cast, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.orm import Student, Attempt, Question, Topic
-from app.models.schemas import StudentCreate, StudentCreateOut, StudentOut, MasteryStat
+from app.db.orm import Student, StudentAssignment, Subject, Attempt, Question, Topic
+from app.models.schemas import (
+    AssignmentCreate,
+    AssignmentOut,
+    LoginCodeOut,
+    MasteryStat,
+    StudentCreate,
+    StudentCreateOut,
+    StudentOut,
+    StudentUpdate,
+)
 from app.routers.auth import get_current_parent_id, get_current_student
 
 router = APIRouter()
+
+
+async def _get_owned_student_or_404(db: AsyncSession, student_id: UUID, parent_id: UUID) -> Student:
+    student = (
+        await db.execute(select(Student).where(Student.id == student_id, Student.parent_user_id == parent_id))
+    ).scalar_one_or_none()
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found.")
+    return student
 
 
 async def _mastery_for_student(db: AsyncSession, student_id: UUID) -> list[MasteryStat]:
@@ -136,11 +154,123 @@ async def get_mastery(
     grouped by topic, using only attempt_number = 1 rows (first tries only —
     retries from the review queue don't count toward mastery).
     """
-    # Ownership check: student must belong to this parent.
-    owns = await db.execute(
-        select(Student.id).where(Student.id == student_id, Student.parent_user_id == parent_id)
-    )
-    if owns.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Student not found.")
-
+    await _get_owned_student_or_404(db, student_id, parent_id)
     return await _mastery_for_student(db, student_id)
+
+
+@router.patch("/{student_id}", response_model=StudentOut)
+async def update_student(
+    student_id: UUID,
+    payload: StudentUpdate,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    student = await _get_owned_student_or_404(db, student_id, parent_id)
+    if payload.display_name is not None:
+        student.display_name = payload.display_name
+    if payload.grade_level is not None:
+        student.grade_level = payload.grade_level
+    await db.commit()
+    await db.refresh(student)
+    return StudentOut(
+        id=student.id, display_name=student.display_name, grade_level=student.grade_level,
+        xp_total=student.xp_total, streak_days=student.streak_days,
+    )
+
+
+@router.post("/{student_id}/login-code/regenerate", response_model=LoginCodeOut)
+async def regenerate_login_code(
+    student_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    student = await _get_owned_student_or_404(db, student_id, parent_id)
+    raw_code = secrets.token_hex(3)
+    student.login_code_hash = hashlib.sha256(raw_code.encode()).hexdigest()
+    student.login_code_expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+    await db.commit()
+    return LoginCodeOut(login_code=raw_code)
+
+
+def _assignment_out(a: StudentAssignment, subject_name: str, topic_name: str | None) -> AssignmentOut:
+    return AssignmentOut(
+        id=a.id, subject_id=a.subject_id, subject_name=subject_name,
+        topic_id=a.topic_id, topic_name=topic_name, created_at=a.created_at,
+    )
+
+
+@router.get("/{student_id}/assignments", response_model=list[AssignmentOut])
+async def list_assignments(
+    student_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    await _get_owned_student_or_404(db, student_id, parent_id)
+    rows = (
+        await db.execute(
+            select(StudentAssignment, Subject.name, Topic.name)
+            .join(Subject, Subject.id == StudentAssignment.subject_id)
+            .outerjoin(Topic, Topic.id == StudentAssignment.topic_id)
+            .where(StudentAssignment.student_id == student_id)
+            .order_by(StudentAssignment.created_at)
+        )
+    ).all()
+    return [_assignment_out(a, subject_name, topic_name) for a, subject_name, topic_name in rows]
+
+
+@router.post("/{student_id}/assignments", response_model=AssignmentOut)
+async def create_assignment(
+    student_id: UUID,
+    payload: AssignmentCreate,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    await _get_owned_student_or_404(db, student_id, parent_id)
+    subject = await db.get(Subject, payload.subject_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    topic_name = None
+    if payload.topic_id is not None:
+        topic = await db.get(Topic, payload.topic_id)
+        if topic is None or topic.subject_id != payload.subject_id:
+            raise HTTPException(status_code=404, detail="Topic not found in this subject.")
+        topic_name = topic.name
+
+    existing = (
+        await db.execute(
+            select(StudentAssignment).where(
+                StudentAssignment.student_id == student_id,
+                StudentAssignment.subject_id == payload.subject_id,
+                StudentAssignment.topic_id == payload.topic_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return _assignment_out(existing, subject.name, topic_name)
+
+    assignment = StudentAssignment(student_id=student_id, subject_id=payload.subject_id, topic_id=payload.topic_id)
+    db.add(assignment)
+    await db.commit()
+    await db.refresh(assignment)
+    return _assignment_out(assignment, subject.name, topic_name)
+
+
+@router.delete("/{student_id}/assignments/{assignment_id}", status_code=204)
+async def delete_assignment(
+    student_id: UUID,
+    assignment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    await _get_owned_student_or_404(db, student_id, parent_id)
+    assignment = (
+        await db.execute(
+            select(StudentAssignment).where(
+                StudentAssignment.id == assignment_id, StudentAssignment.student_id == student_id
+            )
+        )
+    ).scalar_one_or_none()
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="Assignment not found.")
+    await db.delete(assignment)
+    await db.commit()

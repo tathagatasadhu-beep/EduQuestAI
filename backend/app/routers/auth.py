@@ -11,6 +11,7 @@ students.py::create_student) maps to a short-lived, first-party JWT minted
 here — scoped to just that student_id + parent_user_id, nothing else.
 """
 import hashlib
+import os
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from app.db.orm import Student, User
 from app.db.session import get_db
 from app.models.schemas import (
     AuthToken,
+    ForgotPasswordRequest,
     ParentLogin,
     ParentOut,
     ParentSignup,
@@ -32,6 +34,8 @@ from app.models.schemas import (
     StudentLoginRequest,
     StudentOut,
 )
+
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 router = APIRouter()
 
@@ -112,6 +116,22 @@ async def parent_login(payload: ParentLogin, db: AsyncSession = Depends(get_db))
         access_token=result.session.access_token,
         user=ParentOut(id=user.id, email=user.email, full_name=user.full_name),
     )
+
+
+@router.post("/parent/forgot-password", status_code=202)
+async def forgot_password(payload: ForgotPasswordRequest):
+    """Always responds 202 regardless of whether the email exists, so this
+    endpoint can't be used to enumerate registered accounts. Supabase emails
+    a recovery link to `{FRONTEND_URL}/parent/reset-password`, which the
+    frontend handles client-side (see that page for why)."""
+    supabase = get_supabase()
+    try:
+        supabase.auth.reset_password_for_email(
+            payload.email, {"redirect_to": f"{FRONTEND_URL}/parent/reset-password"}
+        )
+    except AuthApiError:
+        pass
+    return {"detail": "If that email is registered, a reset link has been sent."}
 
 
 @router.post("/student/login-code", response_model=StudentAuthToken)

@@ -55,6 +55,16 @@ export type Student = {
 };
 export type StudentCreateOut = Student & { login_code: string };
 export type StudentAuthToken = { access_token: string; token_type: string; student: Student };
+export type LoginCodeOut = { login_code: string };
+
+export type Assignment = {
+  id: string;
+  subject_id: string;
+  subject_name: string;
+  topic_id: string | null;
+  topic_name: string | null;
+  created_at: string;
+};
 
 export type MasteryStat = {
   topic_id: string;
@@ -63,8 +73,9 @@ export type MasteryStat = {
   total_first_attempts: number;
 };
 
-export type Subject = { id: string; name: string; description: string | null };
-export type Topic = { id: string; subject_id: string; name: string };
+export type Subject = { id: string; name: string; description: string | null; grade_level: string | null; sort_order: number };
+export type Topic = { id: string; subject_id: string; name: string; sort_order: number };
+export type ReorderItem = { id: string; sort_order: number };
 
 export type QuestionOption = { option_label: string | null; option_text: string };
 export type QuestionOut = {
@@ -92,6 +103,20 @@ export type PdfUploadOut = {
   id: string;
   status: "pending" | "processing" | "extracted" | "failed";
   original_name: string;
+  content_type: "theory" | "practice";
+  error_message: string | null;
+};
+
+export type PdfOut = {
+  id: string;
+  original_name: string;
+  status: "pending" | "processing" | "extracted" | "failed";
+  error_message: string | null;
+  content_type: "theory" | "practice";
+  subject_id: string | null;
+  subject_name: string | null;
+  question_count: number;
+  uploaded_at: string;
 };
 
 export const api = {
@@ -124,8 +149,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  updateStudent: (token: string, studentId: string, data: { display_name?: string; grade_level?: string }) =>
+    request<Student>(`/api/students/${studentId}`, {
+      method: "PATCH",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  regenerateLoginCode: (token: string, studentId: string) =>
+    request<LoginCodeOut>(`/api/students/${studentId}/login-code/regenerate`, { method: "POST", token }),
   getMastery: (token: string, studentId: string) =>
     request<MasteryStat[]>(`/api/students/${studentId}/mastery`, { token }),
+  listAssignments: (token: string, studentId: string) =>
+    request<Assignment[]>(`/api/students/${studentId}/assignments`, { token }),
+  createAssignment: (token: string, studentId: string, data: { subject_id: string; topic_id?: string | null }) =>
+    request<Assignment>(`/api/students/${studentId}/assignments`, {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteAssignment: (token: string, studentId: string, assignmentId: string) =>
+    request<void>(`/api/students/${studentId}/assignments/${assignmentId}`, { method: "DELETE", token }),
 
   // --- students (self-scoped) ---
   getMyProfile: (token: string) => request<Student>("/api/students/me", { token }),
@@ -133,14 +178,53 @@ export const api = {
 
   // --- subjects/topics (public library) ---
   listSubjects: () => request<Subject[]>("/api/subjects"),
-  createSubject: (token: string, data: { name: string; description?: string }) =>
+  createSubject: (token: string, data: { name: string; description?: string; grade_level?: string }) =>
     request<Subject>("/api/subjects", {
       method: "POST",
       token,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  updateSubject: (token: string, subjectId: string, data: { name?: string; description?: string; grade_level?: string }) =>
+    request<Subject>(`/api/subjects/${subjectId}`, {
+      method: "PATCH",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteSubject: (token: string, subjectId: string) =>
+    request<void>(`/api/subjects/${subjectId}`, { method: "DELETE", token }),
+  reorderSubjects: (token: string, items: ReorderItem[]) =>
+    request<Subject[]>("/api/subjects/reorder", {
+      method: "PATCH",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items),
+    }),
   listTopics: (subjectId: string) => request<Topic[]>(`/api/subjects/${subjectId}/topics`),
+  createTopic: (token: string, subjectId: string, data: { name: string }) =>
+    request<Topic>(`/api/subjects/${subjectId}/topics`, {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  updateTopic: (token: string, topicId: string, data: { name: string }) =>
+    request<Topic>(`/api/subjects/topics/${topicId}`, {
+      method: "PATCH",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteTopic: (token: string, topicId: string) =>
+    request<void>(`/api/subjects/topics/${topicId}`, { method: "DELETE", token }),
+  reorderTopics: (token: string, subjectId: string, items: ReorderItem[]) =>
+    request<Topic[]>(`/api/subjects/${subjectId}/topics/reorder`, {
+      method: "PATCH",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items),
+    }),
 
   // --- quiz ---
   nextQuestion: (token: string, topicId: string) =>
@@ -171,4 +255,21 @@ export const api = {
   },
   pdfStatus: (token: string, pdfId: string) =>
     request<PdfUploadOut>(`/api/pdfs/${pdfId}/status`, { token }),
+  listPdfs: (token: string) => request<PdfOut[]>("/api/pdfs", { token }),
+  updatePdf: (token: string, pdfId: string, data: { content_type: "theory" | "practice" }) =>
+    request<PdfOut>(`/api/pdfs/${pdfId}`, {
+      method: "PATCH",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deletePdf: (token: string, pdfId: string) => request<void>(`/api/pdfs/${pdfId}`, { method: "DELETE", token }),
+
+  // --- auth: password reset ---
+  forgotPassword: (email: string) =>
+    request<{ detail: string }>("/api/auth/parent/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }),
 };

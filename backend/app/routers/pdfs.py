@@ -5,6 +5,13 @@ Upload stores the file in a private, parent-scoped path in Supabase Storage,
 inserts a `pdfs` row (status='pending'), and kicks off a background task that
 runs the OCR + LLM extraction pipeline (ai-engine/pipeline.py) and writes the
 resulting questions/answer_keys, updating `pdfs.status` along the way.
+
+Deletion is soft: the `pdfs` row gets `deleted_at` set and its extracted
+questions get `is_active=False` instead of being hard-deleted. Questions
+cascade-delete `attempts`/`review_queue` rows, and hard-deleting would wipe a
+student's practice history for something they already answered — soft
+deactivation removes the questions from future serving (see
+quiz.py::next_question) while leaving history/mastery intact.
 """
 import asyncio
 import sys
@@ -19,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.supabase_client import get_supabase_admin
 from app.db.orm import AnswerKey, Pdf, Question, Subject, Topic
 from app.db.session import SessionLocal, get_db
-from app.models.schemas import PdfUploadOut
+from app.models.schemas import PdfOut, PdfUpdate, PdfUploadOut
 from app.routers.auth import get_current_parent_id
 
 # ai-engine/ is a sibling of backend/ with a hyphen in its name, so it can't be
@@ -49,16 +56,26 @@ def _ensure_bucket() -> None:
     _bucket_ready = True
 
 
+def _upload_out(pdf: Pdf) -> PdfUploadOut:
+    return PdfUploadOut(
+        id=pdf.id, status=pdf.status, original_name=pdf.original_name,
+        content_type=pdf.content_type, error_message=pdf.error_message,
+    )
+
+
 @router.post("/upload", response_model=PdfUploadOut)
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile,
     subject_id: UUID | None = Form(None),
+    content_type: str = Form("practice"),
     db: AsyncSession = Depends(get_db),
     parent_id: UUID = Depends(get_current_parent_id),
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+    if content_type not in ("theory", "practice"):
+        raise HTTPException(status_code=400, detail="content_type must be 'theory' or 'practice'.")
 
     pdf_bytes = await file.read()
     storage_path = f"{parent_id}/{uuid.uuid4()}_{file.filename}"
@@ -78,6 +95,7 @@ async def upload_pdf(
         storage_path=storage_path,
         original_name=file.filename,
         status="pending",
+        content_type=content_type,
     )
     db.add(pdf)
     await db.commit()
@@ -85,7 +103,94 @@ async def upload_pdf(
 
     background_tasks.add_task(_process_pdf, pdf.id, subject_id, pdf_bytes, file.filename)
 
-    return PdfUploadOut(id=pdf.id, status=pdf.status, original_name=pdf.original_name)
+    return _upload_out(pdf)
+
+
+@router.get("", response_model=list[PdfOut])
+async def list_pdfs(
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    rows = (
+        await db.execute(
+            select(Pdf, Subject.name, func.count(Question.id))
+            .outerjoin(Subject, Subject.id == Pdf.subject_id)
+            .outerjoin(Question, Question.pdf_id == Pdf.id)
+            .where(Pdf.uploaded_by == parent_id, Pdf.deleted_at.is_(None))
+            .group_by(Pdf.id, Subject.name)
+            .order_by(Pdf.uploaded_at.desc())
+        )
+    ).all()
+    return [
+        PdfOut(
+            id=pdf.id, original_name=pdf.original_name, status=pdf.status,
+            error_message=pdf.error_message, content_type=pdf.content_type,
+            subject_id=pdf.subject_id, subject_name=subject_name,
+            question_count=question_count, uploaded_at=pdf.uploaded_at,
+        )
+        for pdf, subject_name, question_count in rows
+    ]
+
+
+async def _get_owned_pdf_or_404(db: AsyncSession, pdf_id: UUID, parent_id: UUID) -> Pdf:
+    pdf = (
+        await db.execute(
+            select(Pdf).where(Pdf.id == pdf_id, Pdf.uploaded_by == parent_id, Pdf.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if pdf is None:
+        raise HTTPException(status_code=404, detail="PDF not found.")
+    return pdf
+
+
+@router.patch("/{pdf_id}", response_model=PdfOut)
+async def update_pdf(
+    pdf_id: UUID,
+    payload: PdfUpdate,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    pdf = await _get_owned_pdf_or_404(db, pdf_id, parent_id)
+    pdf.content_type = payload.content_type
+    await db.commit()
+    await db.refresh(pdf)
+
+    subject_name = None
+    if pdf.subject_id is not None:
+        subject = await db.get(Subject, pdf.subject_id)
+        subject_name = subject.name if subject else None
+    question_count = (
+        await db.execute(select(func.count(Question.id)).where(Question.pdf_id == pdf.id))
+    ).scalar_one()
+    return PdfOut(
+        id=pdf.id, original_name=pdf.original_name, status=pdf.status,
+        error_message=pdf.error_message, content_type=pdf.content_type,
+        subject_id=pdf.subject_id, subject_name=subject_name,
+        question_count=question_count, uploaded_at=pdf.uploaded_at,
+    )
+
+
+@router.delete("/{pdf_id}", status_code=204)
+async def delete_pdf(
+    pdf_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    pdf = await _get_owned_pdf_or_404(db, pdf_id, parent_id)
+
+    from datetime import datetime, timezone
+
+    pdf.deleted_at = datetime.now(timezone.utc)
+    await db.execute(
+        Question.__table__.update().where(Question.pdf_id == pdf.id).values(is_active=False)
+    )
+    await db.commit()
+
+    admin = get_supabase_admin()
+    try:
+        await asyncio.to_thread(admin.storage.from_(BUCKET).remove, [pdf.storage_path])
+    except Exception:
+        pass  # storage object may already be gone — the DB soft-delete is the source of truth
 
 
 @router.get("/{pdf_id}/status", response_model=PdfUploadOut)
@@ -99,7 +204,7 @@ async def pdf_status(
     ).scalar_one_or_none()
     if pdf is None:
         raise HTTPException(status_code=404, detail="PDF not found.")
-    return PdfUploadOut(id=pdf.id, status=pdf.status, original_name=pdf.original_name)
+    return _upload_out(pdf)
 
 
 async def _process_pdf(pdf_id: UUID, subject_id: UUID | None, pdf_bytes: bytes, filename: str) -> None:
@@ -167,8 +272,9 @@ async def _process_pdf(pdf_id: UUID, subject_id: UUID | None, pdf_bytes: bytes, 
 
             pdf.status = "extracted"
             await db.commit()
-        except Exception:
+        except Exception as exc:
             await db.rollback()
             pdf = await db.get(Pdf, pdf_id)
             pdf.status = "failed"
+            pdf.error_message = str(exc)[:500]
             await db.commit()

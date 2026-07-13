@@ -1,11 +1,12 @@
 import { BookOpen, Sparkles, TrendingUp, Users } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ApiError, api, type MasteryStat } from "@/lib/api";
 import { getParentToken } from "@/lib/session";
 import AddStudentForm from "./AddStudentForm";
+import StudentSettings from "./StudentSettings";
 import LogoutButton from "@/components/LogoutButton";
 import StreakBadge from "@/components/StreakBadge";
-import UploadDropzone from "@/components/UploadDropzone";
 import XPBar from "@/components/XPBar";
 
 const AVATAR_COLORS = [
@@ -46,6 +47,22 @@ export default async function ParentDashboardPage() {
   );
   const masteryByStudent = new Map(masteryEntries);
 
+  const topicEntries = await Promise.all(
+    subjects.map(async (s) => [s.id, await api.listTopics(s.id)] as const)
+  );
+  const topicsBySubject = Object.fromEntries(topicEntries);
+
+  const assignmentEntries = await Promise.all(
+    students.map(async (s) => {
+      try {
+        return [s.id, await api.listAssignments(token, s.id)] as const;
+      } catch {
+        return [s.id, [] as Awaited<ReturnType<typeof api.listAssignments>>] as const;
+      }
+    })
+  );
+  const assignmentsByStudent = new Map(assignmentEntries);
+
   return (
     <div className="min-h-full bg-zinc-50">
       <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur">
@@ -54,7 +71,12 @@ export default async function ParentDashboardPage() {
             <Sparkles className="h-5 w-5 text-indigo-500" strokeWidth={2.2} />
             <span className="font-bold text-zinc-800">EduQuestAI</span>
           </div>
-          <LogoutButton />
+          <div className="flex items-center gap-4">
+            <Link href="/parent/library" className="text-sm font-medium text-zinc-500 hover:text-zinc-800">
+              Library
+            </Link>
+            <LogoutButton />
+          </div>
         </div>
       </header>
 
@@ -96,6 +118,12 @@ export default async function ParentDashboardPage() {
                     <TrendingUp className="h-3.5 w-3.5" strokeWidth={2} />
                     {overallAccuracy === null ? "No practice yet" : `${overallAccuracy}% overall accuracy`}
                   </p>
+                  <StudentSettings
+                    student={s}
+                    subjects={subjects}
+                    topicsBySubject={topicsBySubject}
+                    initialAssignments={assignmentsByStudent.get(s.id) ?? []}
+                  />
                 </div>
               );
             })}
@@ -108,16 +136,18 @@ export default async function ParentDashboardPage() {
             <BookOpen className="h-4 w-4" strokeWidth={2.2} />
             Worksheet Library
           </h2>
-          <UploadDropzone subjects={subjects} />
-          {subjects.length > 0 && (
-            <ul className="mt-4 flex flex-wrap gap-2">
-              {subjects.map((s) => (
-                <li key={s.id} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200">
-                  {s.name}
-                </li>
-              ))}
-            </ul>
-          )}
+          <Link
+            href="/parent/library"
+            className="flex items-center justify-between rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:shadow-md"
+          >
+            <div>
+              <p className="font-semibold text-zinc-800">
+                {subjects.length} subject{subjects.length === 1 ? "" : "s"}
+              </p>
+              <p className="text-sm text-zinc-500">Upload worksheets, organize by grade, and manage what&apos;s assigned to each student.</p>
+            </div>
+            <span className="text-sm font-medium text-indigo-600">Manage library →</span>
+          </Link>
         </section>
       </div>
     </div>

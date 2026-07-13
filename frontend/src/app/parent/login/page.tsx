@@ -69,7 +69,12 @@ export default function ParentLoginPage() {
             {submitting ? "Logging in..." : "Log In"}
           </button>
         </form>
-        <p className="mt-5 text-center text-sm text-zinc-500">
+        <p className="mt-3 text-center text-sm">
+          <Link href="/parent/forgot-password" className="font-medium text-zinc-500 hover:text-indigo-600">
+            Forgot password?
+          </Link>
+        </p>
+        <p className="mt-2 text-center text-sm text-zinc-500">
           New here?{" "}
           <Link href="/parent/signup" className="font-medium text-indigo-600 hover:text-indigo-700">
             Create an account

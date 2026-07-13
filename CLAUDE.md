@@ -48,21 +48,42 @@ assuming anything is a stub.
   no `NEXT_PUBLIC_` prefix) instead of exposing the backend URL or Supabase keys to client JS.
 - **Progress tracking / wrong-answer review** — mastery % per topic (`students.py::get_mastery`, also
   self-service at `/me/mastery` for students), review queue resolves after 2 correct answers in a row.
+- **Parent library management** (Phase 1, added 2026-07-12) — full CRUD + reorder for subjects/topics
+  (`subjects.py`), each `Subject` now has `grade_level` (free text: `'7'`, `'SSAT'`, `'SAT'`, etc.) and
+  `sort_order` for grouping/ordering in `frontend/src/app/parent/library/`. PDFs can be listed, soft-deleted
+  (`DELETE /api/pdfs/{id}` sets `deleted_at` and flips their `Question.is_active` to `false` instead of hard
+  deleting — see the comment atop `pdfs.py` for why: hard-deleting a Question would cascade-wipe a student's
+  `attempts`/`review_queue` history), and tagged `content_type` (`theory` vs `practice`). Upload failures now
+  surface the real `Pdf.error_message` in the UI instead of a generic message.
+- **Student assignment** — parents assign specific subjects (or individual topics within a subject) to a
+  student via the new `student_assignments` table and the checklist UI in `StudentSettings.tsx`. Not yet
+  consumed by the student side (see Phase 2 below) — the "My Subjects" dropdown that reads these doesn't exist
+  yet, this only builds the assignment data model and parent-side UI.
+- **Parent password reset** — `POST /api/auth/parent/forgot-password` → Supabase's
+  `reset_password_for_email`. The completion page (`frontend/src/app/parent/reset-password/page.tsx`) is a
+  deliberate, narrow exception to "the browser never talks to Supabase directly": it uses `@supabase/supabase-js`
+  client-side because Supabase's recovery flow needs the browser to hold the recovery session and call
+  `updateUser()` directly — see the comment at the top of that file. This is why `NEXT_PUBLIC_SUPABASE_URL`/
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` now exist as frontend env vars (anon key is meant to be public).
+- **Login-code regeneration** — `POST /api/students/{id}/login-code/regenerate` (parent-driven; students have
+  no self-service "forgot code" since they don't have email/password).
 
-### What's still missing (confirmed via a full feature audit against the user's spec, 2026-07-08)
+### What's still missing (confirmed via a full feature audit against the user's spec, 2026-07-08; re-checked 2026-07-12)
 
-- **AI tutor** — not built at all. No chat/explain-this-question feature exists anywhere.
+- **AI tutor** — not built at all. No chat/explain-this-question feature exists anywhere. This is Phase 2.
+- **Student nav redesign** (Home / My Subjects / Practice / Badge / Help) — also Phase 2; the student side is
+  still the single-page dashboard at `frontend/src/app/student/[studentId]/page.tsx`. Phase 2 will consume the
+  `student_assignments` data built in Phase 1 to populate "My Subjects."
 - **Timed quizzes** — no timer/time-limit concept anywhere in the quiz engine.
 - **Parent approval workflow** — the spec's PDF workflow has a "Parent Review" gate before topics/questions
-  become usable; ours publishes immediately after extraction. No approve/reject UI exists.
-- **Assign practice** — students currently pick any topic freely; there's no way for a parent to assign
-  specific topics/practice sets to a student.
+  become usable; ours publishes immediately after extraction. No approve/reject UI exists (library management
+  added delete/reorder/content-type tagging, but not a pre-publish approval gate).
 - **Question object gaps** — `page_number` doesn't exist as a column; `image_path` exists on `Question` but is
   never populated (the pipeline doesn't crop/save an image, only OCR text/LaTeX); no `subtopic` or `tags`
   concept exists. `explanation` on `AttemptResult` is intentionally always `None` — matches the spec's own
   "(future)" marker, not a gap.
 - **Gamification extras** — XP and streaks work; no badges, levels-as-rewards, or leaderboards exist beyond
-  the level number derived from XP.
+  the level number derived from XP. Badges are planned for Phase 2.
 - **Known extraction-quality issue** (not a code bug, an LLM-output gap): multi-part questions with no single
   canonical answer (e.g. "a. 6x  b. -10x  c. x-5") sometimes come back from the extraction prompt with zero
   answer options — those questions get no `answer_keys` row, so any student attempt on them always grades as
@@ -144,3 +165,12 @@ See `DEPLOY.md` in this same root for the original hosting plan — note it pred
 its exact env-var list is now superseded by the "Deployment gotchas" section above (e.g. it doesn't mention
 the connection pooler requirement or that Vercel only needs `BACKEND_URL`). Follow this file's gotchas section
 over `DEPLOY.md` where they conflict.
+
+**Not yet applied to production** (as of the Phase 1 library-management work, 2026-07-12) — do these before
+that code reaches Render/Vercel:
+- Run `database/migrations/002_library_management.sql` against the production Supabase project (Supabase SQL
+  editor, same as `001_init.sql` was — there's no Alembic).
+- Add `FRONTEND_URL` to Render's env vars (the production frontend origin, for the password-reset redirect
+  link).
+- Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to Vercel's env vars (see the
+  password-reset note above for why these are needed despite the "browser never talks to Supabase" rule).

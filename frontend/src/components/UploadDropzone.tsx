@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileText, Loader2, Plus, Sparkles, UploadCloud, XCircle } from "lucide-react";
-import type { Subject } from "@/lib/api";
+import type { PdfUploadOut, Subject } from "@/lib/api";
 
 type UploadState =
   | { phase: "uploading" }
-  | { phase: "tracking"; pdfId: string; status: string }
+  | { phase: "tracking"; pdfId: string; status: string; errorMessage?: string | null }
   | { phase: "error"; message: string };
 
 type TrackedUpload = {
@@ -30,9 +30,16 @@ const STATUS_META: Record<string, { label: string; icon: typeof Loader2; classNa
   failed: { label: "Something went wrong processing this file.", icon: XCircle, className: "text-rose-500" },
 };
 
-export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
+export default function UploadDropzone({
+  subjects,
+  onUploaded,
+}: {
+  subjects: Subject[];
+  onUploaded?: (pdf: PdfUploadOut) => void;
+}) {
   const [localSubjects, setLocalSubjects] = useState(subjects);
   const [subjectId, setSubjectId] = useState(AUTO_DETECT);
+  const [contentType, setContentType] = useState<"theory" | "practice">("practice");
   const [addingSubject, setAddingSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState("");
   const [uploads, setUploads] = useState<TrackedUpload[]>([]);
@@ -59,7 +66,11 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
           if (!res.ok) continue;
           const data = await res.json();
           setUploads((prev) =>
-            prev.map((x) => (x.id === u.id && x.state.phase === "tracking" ? { ...x, state: { ...x.state, status: data.status } } : x))
+            prev.map((x) =>
+              x.id === u.id && x.state.phase === "tracking"
+                ? { ...x, state: { ...x.state, status: data.status, errorMessage: data.error_message } }
+                : x
+            )
           );
         } catch {
           // transient network error — the next poll tick will retry
@@ -92,6 +103,7 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
     const form = new FormData();
     form.append("file", file);
     if (subjectId !== AUTO_DETECT) form.append("subject_id", subjectId);
+    form.append("content_type", contentType);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
@@ -108,6 +120,7 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
       setUploads((prev) =>
         prev.map((u) => (u.id === uploadId ? { ...u, state: { phase: "tracking", pdfId: data.id, status: data.status } } : u))
       );
+      onUploaded?.(data);
     } catch (err) {
       const timedOut = err instanceof DOMException && err.name === "AbortError";
       setUploads((prev) =>
@@ -167,6 +180,15 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
                 {s.name}
               </option>
             ))}
+          </select>
+          <select
+            value={contentType}
+            onChange={(e) => setContentType(e.target.value as "theory" | "practice")}
+            title="Is this worksheet theory/explanation or practice questions?"
+            className="shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+          >
+            <option value="practice">Practice</option>
+            <option value="theory">Theory</option>
           </select>
           <button
             title="Add a subject"
@@ -257,6 +279,9 @@ export default function UploadDropzone({ subjects }: { subjects: Subject[] }) {
                 <div>
                   <p className="font-medium text-zinc-700">{u.fileName}</p>
                   <p className={meta.className}>{meta.label}</p>
+                  {u.state.phase === "tracking" && u.state.status === "failed" && u.state.errorMessage && (
+                    <p className="mt-0.5 text-xs text-rose-500">{u.state.errorMessage}</p>
+                  )}
                 </div>
               </li>
             );
