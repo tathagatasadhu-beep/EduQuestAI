@@ -61,7 +61,7 @@ export default async function StudentHomePage({
       {weakest && weakestSubject ? (
         <Link
           href={`/student/${me.id}/subjects/${weakestSubject.id}`}
-          className="mb-6 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-purple-500 to-pink-500 p-5 text-white shadow-sm transition hover:shadow-md"
+          className="mb-6 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-purple-500 to-teal-500 p-5 text-white shadow-sm transition hover:shadow-md"
         >
           <Sparkles className="h-6 w-6 shrink-0" strokeWidth={2} />
           <div className="flex-1">
@@ -73,7 +73,7 @@ export default async function StudentHomePage({
       ) : assignedSubjects.length > 0 ? (
         <Link
           href={`/student/${me.id}/subjects`}
-          className="mb-6 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-purple-500 to-pink-500 p-5 text-white shadow-sm transition hover:shadow-md"
+          className="mb-6 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-purple-500 to-teal-500 p-5 text-white shadow-sm transition hover:shadow-md"
         >
           <Compass className="h-6 w-6 shrink-0" strokeWidth={2} />
           <div className="flex-1">

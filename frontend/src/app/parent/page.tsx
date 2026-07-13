@@ -11,7 +11,7 @@ import XPBar from "@/components/XPBar";
 
 const AVATAR_COLORS = [
   "bg-brand-500",
-  "bg-pink-500",
+  "bg-teal-500",
   "bg-amber-500",
   "bg-emerald-500",
   "bg-sky-500",

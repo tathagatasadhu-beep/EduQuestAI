@@ -12,7 +12,7 @@ export default async function StudentLayout({
   const { studentId } = await params;
 
   return (
-    <div className="flex min-h-full flex-1 flex-col bg-gradient-to-b from-purple-50 via-pink-50/40 to-white">
+    <div className="flex min-h-full flex-1 flex-col bg-gradient-to-b from-purple-50 via-teal-50/40 to-white">
       <header className="border-b border-purple-100/70 bg-white/70 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-center justify-between px-6 py-3">
           <div className="flex items-center gap-2 text-purple-600">

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileText, Loader2, Plus, Sparkles, UploadCloud, XCircle } from "lucide-react";
-import type { PdfUploadOut, Subject } from "@/lib/api";
+import type { PdfUploadOut, Subject, Topic } from "@/lib/api";
 
 type UploadState =
   | { phase: "uploading" }
@@ -22,6 +22,11 @@ const UPLOAD_TIMEOUT_MS = 90_000;
 // Sentinel select value meaning "let the AI pipeline suggest the subject" —
 // distinct from any real subject UUID.
 const AUTO_DETECT = "__auto__";
+// Sentinel meaning "group questions into topics automatically" — the AI does
+// this per-worksheet with no visibility into the rest of the library, so it
+// tends to invent a near-duplicate topic per question. Picking a real topic
+// here assigns every question from this upload to it instead.
+const AUTO_GROUP_TOPICS = "__auto_topics__";
 
 const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
   pending: { label: "Queued...", icon: Loader2, className: "text-zinc-500" },
@@ -42,6 +47,10 @@ export default function UploadDropzone({
   const [contentType, setContentType] = useState<"theory" | "practice">("practice");
   const [addingSubject, setAddingSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState("");
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [topicId, setTopicId] = useState(AUTO_GROUP_TOPICS);
+  const [addingTopic, setAddingTopic] = useState(false);
+  const [newTopicName, setNewTopicName] = useState("");
   const [uploads, setUploads] = useState<TrackedUpload[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -80,6 +89,49 @@ export default function UploadDropzone({
     return () => clearInterval(interval);
   }, []);
 
+  // Topic choice only makes sense once a real subject is known — reset and
+  // refetch whenever the subject changes.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting topic selection on subject change is intentional
+    setTopicId(AUTO_GROUP_TOPICS);
+    setAddingTopic(false);
+    if (subjectId === AUTO_DETECT) {
+      setTopics([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/subjects/${subjectId}/topics`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (!cancelled) setTopics(data);
+      })
+      .catch(() => {
+        if (!cancelled) setTopics([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [subjectId]);
+
+  async function handleAddTopic(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newTopicName.trim() || subjectId === AUTO_DETECT) return;
+    const res = await fetch(`/api/subjects/${subjectId}/topics`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newTopicName.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setGlobalError(data.error || "Could not add topic.");
+      return;
+    }
+    setTopics((prev) => (prev.some((t) => t.id === data.id) ? prev : [...prev, data]));
+    setTopicId(data.id);
+    setNewTopicName("");
+    setAddingTopic(false);
+  }
+
   async function handleAddSubject(e: React.FormEvent) {
     e.preventDefault();
     if (!newSubjectName.trim()) return;
@@ -103,6 +155,7 @@ export default function UploadDropzone({
     const form = new FormData();
     form.append("file", file);
     if (subjectId !== AUTO_DETECT) form.append("subject_id", subjectId);
+    if (topicId !== AUTO_GROUP_TOPICS) form.append("topic_id", topicId);
     form.append("content_type", contentType);
 
     const controller = new AbortController();
@@ -203,8 +256,62 @@ export default function UploadDropzone({
       {subjectId === AUTO_DETECT && !addingSubject && (
         <p className="mb-3 flex items-center gap-1.5 text-xs text-brand-500">
           <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
-          The subject and topics will be detected automatically from each file.
+          The subject will be detected automatically, and questions grouped into topics.
         </p>
+      )}
+
+      {subjectId !== AUTO_DETECT && !addingSubject && !addingTopic && (
+        <div className="mb-3 flex items-center gap-2">
+          <select
+            value={topicId}
+            onChange={(e) => setTopicId(e.target.value)}
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
+          >
+            <option value={AUTO_GROUP_TOPICS}>✨ Auto-group into topics</option>
+            {topics.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <button
+            title="Add a topic"
+            onClick={() => setAddingTopic(true)}
+            className="flex shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 p-2 text-zinc-500 transition hover:border-brand-300 hover:text-brand-600"
+          >
+            <Plus className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
+
+      {subjectId !== AUTO_DETECT && topicId === AUTO_GROUP_TOPICS && !addingTopic && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-brand-500">
+          <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
+          Picking a topic keeps the library tidy — auto-grouping can get overly granular.
+        </p>
+      )}
+
+      {addingTopic && (
+        <form onSubmit={handleAddTopic} className="mb-3 flex gap-2">
+          <input
+            autoFocus
+            required
+            placeholder="e.g. Absolute Value"
+            value={newTopicName}
+            onChange={(e) => setNewTopicName(e.target.value)}
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
+          />
+          <button type="submit" className="shrink-0 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+            Add
+          </button>
+          <button
+            type="button"
+            onClick={() => setAddingTopic(false)}
+            className="shrink-0 rounded-lg px-3 py-2 text-sm text-zinc-500 hover:text-zinc-700"
+          >
+            Cancel
+          </button>
+        </form>
       )}
 
       {addingSubject && (

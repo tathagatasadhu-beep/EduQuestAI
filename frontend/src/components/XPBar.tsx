@@ -24,7 +24,7 @@ export default function XPBar({ xpTotal, celebrate = false }: { xpTotal: number;
       </div>
       <div className="h-3 w-full overflow-hidden rounded-full bg-purple-100 shadow-inner">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-pink-500 transition-all duration-700 ease-out"
+          className="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-teal-500 transition-all duration-700 ease-out"
           style={{ width: `${percent}%` }}
         />
       </div>

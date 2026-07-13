@@ -59,7 +59,7 @@ export default function TutorChat({ subjectId, subjectName }: { subjectId: strin
         {messages.length === 0 ? (
           <div>
             <div className="mb-5 flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-teal-500 text-white">
                 <Sparkles className="h-4.5 w-4.5" strokeWidth={2.2} />
               </span>
               <p className="font-semibold text-zinc-800">Ask me anything about {subjectName}!</p>
@@ -84,7 +84,7 @@ export default function TutorChat({ subjectId, subjectName }: { subjectId: strin
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
                     m.role === "user"
-                      ? "bg-gradient-to-br from-purple-500 to-pink-500 text-white"
+                      ? "bg-gradient-to-br from-purple-500 to-teal-500 text-white"
                       : "bg-purple-50 text-zinc-700"
                   }`}
                 >
@@ -124,7 +124,7 @@ export default function TutorChat({ subjectId, subjectName }: { subjectId: strin
         <button
           type="submit"
           disabled={sending || !input.trim()}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-teal-500 text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Send className="h-4 w-4" strokeWidth={2.2} />
         </button>

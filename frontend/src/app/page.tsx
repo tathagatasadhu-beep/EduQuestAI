@@ -30,7 +30,7 @@ export default function Home() {
         </Link>
         <Link
           href="/student/login"
-          className="flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-amber-400 to-pink-500 px-6 py-4 text-center font-bold text-white shadow-md shadow-pink-500/30 transition hover:opacity-90 hover:shadow-lg"
+          className="flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-amber-400 to-teal-500 px-6 py-4 text-center font-bold text-white shadow-md shadow-teal-500/30 transition hover:opacity-90 hover:shadow-lg"
         >
           <GraduationCap className="h-5 w-5" strokeWidth={2.2} />
           I&apos;m a Student

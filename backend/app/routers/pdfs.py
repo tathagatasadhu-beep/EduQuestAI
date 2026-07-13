@@ -68,6 +68,7 @@ async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile,
     subject_id: UUID | None = Form(None),
+    topic_id: UUID | None = Form(None),
     content_type: str = Form("practice"),
     db: AsyncSession = Depends(get_db),
     parent_id: UUID = Depends(get_current_parent_id),
@@ -76,6 +77,10 @@ async def upload_pdf(
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
     if content_type not in ("theory", "practice"):
         raise HTTPException(status_code=400, detail="content_type must be 'theory' or 'practice'.")
+    if topic_id is not None:
+        topic = await db.get(Topic, topic_id)
+        if topic is None or (subject_id is not None and topic.subject_id != subject_id):
+            raise HTTPException(status_code=400, detail="Topic not found in the selected subject.")
 
     pdf_bytes = await file.read()
     storage_path = f"{parent_id}/{uuid.uuid4()}_{file.filename}"
@@ -101,7 +106,7 @@ async def upload_pdf(
     await db.commit()
     await db.refresh(pdf)
 
-    background_tasks.add_task(_process_pdf, pdf.id, subject_id, pdf_bytes, file.filename)
+    background_tasks.add_task(_process_pdf, pdf.id, subject_id, topic_id, pdf_bytes, file.filename)
 
     return _upload_out(pdf)
 
@@ -231,13 +236,22 @@ async def pdf_status(
     return _upload_out(pdf)
 
 
-async def _process_pdf(pdf_id: UUID, subject_id: UUID | None, pdf_bytes: bytes, filename: str) -> None:
+async def _process_pdf(
+    pdf_id: UUID, subject_id: UUID | None, topic_id: UUID | None, pdf_bytes: bytes, filename: str
+) -> None:
     """Runs after the response is sent, so it opens its own DB session —
     the request's session is long gone by the time this executes.
 
     subject_id is None when the parent didn't pick one at upload time — in
     that case the pipeline's own subject_guess resolves-or-creates one here,
-    the same dedup-by-name pattern already used for topics below."""
+    the same dedup-by-name pattern used below when topic_id also isn't given.
+
+    topic_id, when the parent picks one at upload time, assigns every
+    extracted question to that single topic instead of the AI's per-question
+    topic_guess — the guess runs one LLM call per worksheet with no visibility
+    into topics already in the library, so left alone it tends to invent a
+    new near-duplicate topic per question instead of grouping them. A
+    parent-chosen topic sidesteps that entirely."""
     async with SessionLocal() as db:
         pdf = await db.get(Pdf, pdf_id)
         pdf.status = "processing"
@@ -259,19 +273,24 @@ async def _process_pdf(pdf_id: UUID, subject_id: UUID | None, pdf_bytes: bytes, 
                 resolved_subject_id = subject.id
                 pdf.subject_id = resolved_subject_id
 
+            fixed_topic = await db.get(Topic, topic_id) if topic_id is not None else None
+
             for eq in result.questions:
-                topic = (
-                    await db.execute(
-                        select(Topic).where(
-                            Topic.subject_id == resolved_subject_id,
-                            func.lower(Topic.name) == eq.topic_guess.strip().lower(),
+                if fixed_topic is not None:
+                    topic = fixed_topic
+                else:
+                    topic = (
+                        await db.execute(
+                            select(Topic).where(
+                                Topic.subject_id == resolved_subject_id,
+                                func.lower(Topic.name) == eq.topic_guess.strip().lower(),
+                            )
                         )
-                    )
-                ).scalar_one_or_none()
-                if topic is None:
-                    topic = Topic(subject_id=resolved_subject_id, name=eq.topic_guess.strip())
-                    db.add(topic)
-                    await db.flush()
+                    ).scalar_one_or_none()
+                    if topic is None:
+                        topic = Topic(subject_id=resolved_subject_id, name=eq.topic_guess.strip())
+                        db.add(topic)
+                        await db.flush()
 
                 question = Question(
                     pdf_id=pdf_id,

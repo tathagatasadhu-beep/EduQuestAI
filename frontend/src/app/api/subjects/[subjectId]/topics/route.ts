@@ -1,6 +1,21 @@
 import { ApiError, api } from "@/lib/api";
 import { getParentToken } from "@/lib/session";
 
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ subjectId: string }> }
+) {
+  const { subjectId } = await params;
+  try {
+    const topics = await api.listTopics(subjectId);
+    return Response.json(topics);
+  } catch (err) {
+    const status = err instanceof ApiError ? err.status : 500;
+    const message = err instanceof ApiError ? err.message : "Could not fetch topics.";
+    return Response.json({ error: message }, { status });
+  }
+}
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ subjectId: string }> }
