@@ -5,17 +5,23 @@ there's no seed data or admin UI and a parent has to be able to add
 "AP Calculus"/"SAT Math"/etc. before they can upload a worksheet into it.
 
 Subjects/topics can't be deleted while they still have a non-deleted PDF
-attached — `pdfs.subject_id`/`questions.topic_id` have no cascade-delete, and
-even if they did, silently wiping out extracted questions out from under a
-delete would be surprising. The parent has to delete/reassign those PDFs
-first (see pdfs.py)."""
+attached — the parent has to delete/reassign those PDFs first (see pdfs.py).
+Once that's clear, any *orphaned* questions left behind by an already-deleted
+PDF (soft-deleted, `is_active=False`, but the row itself still exists — see
+pdfs.py's delete comment) are hard-deleted here before the topic/subject
+itself is deleted. `questions.topic_id` is NOT NULL with no cascade, so
+leaving those rows in place would otherwise fail with a raw FK-violation
+500 the moment a topic/subject delete tried to cascade past them. This is
+only safe because we first confirm no student has actually attempted any of
+those orphaned questions (`attempts.question_id` cascades from `questions`,
+so hard-deleting would silently erase real practice history otherwise)."""
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.orm import Pdf, Subject, Topic as TopicOrm
+from app.db.orm import Attempt, Pdf, Question, Subject, Topic as TopicOrm
 from app.db.session import get_db
 from app.models.schemas import (
     ReorderItem,
@@ -65,6 +71,29 @@ async def create_subject(
     await db.commit()
     await db.refresh(subject)
     return _subject_out(subject)
+
+
+async def _topics_have_attempts(db: AsyncSession, topic_ids: list[UUID]) -> bool:
+    if not topic_ids:
+        return False
+    exists = (
+        await db.execute(
+            select(Attempt.id)
+            .join(Question, Question.id == Attempt.question_id)
+            .where(Question.topic_id.in_(topic_ids))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return exists is not None
+
+
+async def _purge_orphaned_questions(db: AsyncSession, topic_ids: list[UUID]) -> None:
+    """Hard-deletes questions under these topics (cascades to answer_keys) —
+    only call after `_topics_have_attempts` has confirmed none of them have
+    ever been attempted by a student."""
+    if not topic_ids:
+        return
+    await db.execute(Question.__table__.delete().where(Question.topic_id.in_(topic_ids)))
 
 
 async def _get_subject_or_404(db: AsyncSession, subject_id: UUID) -> Subject:
@@ -132,6 +161,17 @@ async def delete_subject(
             status_code=400,
             detail="This subject still has worksheets in it — delete or reassign them first.",
         )
+
+    topic_ids = (
+        await db.execute(select(TopicOrm.id).where(TopicOrm.subject_id == subject_id))
+    ).scalars().all()
+    if await _topics_have_attempts(db, topic_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="A student has already practiced questions in this subject, so it can't be deleted.",
+        )
+
+    await _purge_orphaned_questions(db, topic_ids)
     await db.delete(subject)
     await db.commit()
 
@@ -197,9 +237,7 @@ async def delete_topic(
     db: AsyncSession = Depends(get_db),
     parent_id: UUID = Depends(get_current_parent_id),
 ):
-    from app.db.orm import Question
-
-    await _get_topic_or_404(db, topic_id)
+    topic = await _get_topic_or_404(db, topic_id)
     has_active_questions = (
         await db.execute(
             select(Question.id).where(Question.topic_id == topic_id, Question.is_active.is_(True)).limit(1)
@@ -210,7 +248,15 @@ async def delete_topic(
             status_code=400,
             detail="This topic still has active worksheets in it — delete or reassign them first.",
         )
-    await db.delete(await db.get(TopicOrm, topic_id))
+
+    if await _topics_have_attempts(db, [topic_id]):
+        raise HTTPException(
+            status_code=400,
+            detail="A student has already practiced questions in this topic, so it can't be deleted.",
+        )
+
+    await _purge_orphaned_questions(db, [topic_id])
+    await db.delete(topic)
     await db.commit()
 
 
