@@ -10,6 +10,26 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Parent-side palette: dark navy hero + electric-blue accent + soft
+     pastel content sections. Deliberately scoped to the parent/marketing
+     surfaces — the student side keeps its warm purple/pink game tone. */
+  --color-navy-950: #0a0e1f;
+  --color-navy-900: #0d1330;
+  --color-navy-800: #131a3d;
+  --color-navy-700: #1c2657;
+  --color-navy-600: #29357a;
+  --color-brand-50: #f2f4ff;
+  --color-brand-100: #e4e9ff;
+  --color-brand-200: #c7d0ff;
+  --color-brand-300: #9fabff;
+  --color-brand-400: #6b83ff;
+  --color-brand-500: #3d5afe;
+  --color-brand-600: #2f47f5;
+  --color-brand-700: #2536c2;
+  --color-brand-800: #1e2c94;
+  --color-brand-900: #1a2470;
+  --color-parent-bg: #eef1fb;
 }
 
 body {

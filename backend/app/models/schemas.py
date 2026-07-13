@@ -150,6 +150,11 @@ class PdfUploadOut(BaseModel):
     error_message: Optional[str] = None
 
 
+class PdfTopicOut(BaseModel):
+    id: UUID
+    name: str
+
+
 class PdfOut(BaseModel):
     id: UUID
     original_name: str
@@ -160,6 +165,7 @@ class PdfOut(BaseModel):
     subject_name: Optional[str] = None
     question_count: int
     uploaded_at: datetime
+    topics: list[PdfTopicOut] = []
 
 
 class PdfUpdate(BaseModel):

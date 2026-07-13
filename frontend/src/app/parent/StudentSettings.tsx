@@ -147,16 +147,16 @@ export default function StudentSettings({
                 <input
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="rounded-lg border border-zinc-300 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none"
+                  className="rounded-lg border border-zinc-300 px-2 py-1.5 text-sm focus:border-brand-400 focus:outline-none"
                 />
                 <input
                   value={gradeLevel}
                   onChange={(e) => setGradeLevel(e.target.value)}
                   placeholder="Grade level"
-                  className="rounded-lg border border-zinc-300 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none"
+                  className="rounded-lg border border-zinc-300 px-2 py-1.5 text-sm focus:border-brand-400 focus:outline-none"
                 />
                 <div className="flex gap-2">
-                  <button disabled={busy} type="submit" className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
+                  <button disabled={busy} type="submit" className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
                     Save
                   </button>
                   <button type="button" onClick={() => setEditing(false)} className="rounded-lg px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-700">
@@ -165,7 +165,7 @@ export default function StudentSettings({
                 </div>
               </form>
             ) : (
-              <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-indigo-600">
+              <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-brand-600">
                 <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
                 Edit name / grade
               </button>
@@ -174,22 +174,22 @@ export default function StudentSettings({
 
           <div>
             {newCode ? (
-              <div className="rounded-lg bg-indigo-50 p-2.5">
-                <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-indigo-800">
+              <div className="rounded-lg bg-brand-50 p-2.5">
+                <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-brand-800">
                   <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={2.2} />
                   New login code
                 </p>
-                <p className="flex items-center gap-1.5 font-mono text-sm text-indigo-900">
+                <p className="flex items-center gap-1.5 font-mono text-sm text-brand-900">
                   <KeyRound className="h-3.5 w-3.5" strokeWidth={2} />
                   {newCode}
                 </p>
-                <p className="mt-1 text-xs text-indigo-600">Shown once — write it down.</p>
+                <p className="mt-1 text-xs text-brand-600">Shown once — write it down.</p>
               </div>
             ) : (
               <button
                 disabled={busy}
                 onClick={regenerateCode}
-                className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-indigo-600 disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-brand-600 disabled:opacity-50"
               >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />}
                 Regenerate login code

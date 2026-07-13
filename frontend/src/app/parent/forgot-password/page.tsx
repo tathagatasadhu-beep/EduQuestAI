@@ -30,15 +30,19 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-indigo-50 to-white px-6 py-24">
-      <Link href="/" className="mb-6 flex items-center gap-2 text-zinc-500 hover:text-zinc-700">
-        <Sparkles className="h-5 w-5 text-indigo-500" />
+    <div className="relative flex flex-1 flex-col items-center justify-center overflow-hidden bg-navy-950 px-6 py-24">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_50%_10%,rgba(61,90,254,0.3),transparent_45%)]"
+      />
+      <Link href="/" className="mb-6 flex items-center gap-2 text-slate-300 hover:text-white">
+        <Sparkles className="h-5 w-5 text-brand-400" />
         <span className="font-semibold">EduQuestAI</span>
       </Link>
-      <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-xl shadow-indigo-100/50 ring-1 ring-zinc-200">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-2xl shadow-black/30">
         {sent ? (
           <>
-            <div className="mb-2 flex items-center gap-2 text-indigo-700">
+            <div className="mb-2 flex items-center gap-2 text-brand-700">
               <CheckCircle2 className="h-5 w-5" strokeWidth={2.2} />
               <h1 className="text-xl font-bold">Check your email</h1>
             </div>
@@ -59,13 +63,13 @@ export default function ForgotPasswordPage() {
                 placeholder="Email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="border-zinc-300 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                className="border-zinc-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
               />
               {error && <p className="text-sm text-rose-500">{error}</p>}
               <button
                 type="submit"
                 disabled={submitting}
-                className="mt-2 rounded-lg bg-indigo-600 py-2.5 font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="mt-2 rounded-full bg-brand-500 py-2.5 font-semibold text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {submitting ? "Sending..." : "Send reset link"}
               </button>
@@ -73,7 +77,7 @@ export default function ForgotPasswordPage() {
           </>
         )}
         <p className="mt-5 text-center text-sm text-zinc-500">
-          <Link href="/parent/login" className="font-medium text-indigo-600 hover:text-indigo-700">
+          <Link href="/parent/login" className="font-medium text-brand-600 hover:text-brand-700">
             Back to login
           </Link>
         </p>

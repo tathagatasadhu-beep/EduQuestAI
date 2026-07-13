@@ -5,18 +5,25 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
-  ChevronDown,
-  ChevronRight,
+  CheckCircle2,
+  Loader2,
   Pencil,
   Plus,
   Trash2,
   X,
+  XCircle,
 } from "lucide-react";
 import type { PdfOut, PdfUploadOut, Subject, Topic } from "@/lib/api";
-import PdfList from "./PdfList";
 import UploadDropzone from "@/components/UploadDropzone";
 
 const GRADE_OPTIONS = ["7", "8", "9", "10", "11", "12", "SSAT", "SAT"];
+
+const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
+  pending: { label: "Queued", icon: Loader2, className: "text-zinc-500" },
+  processing: { label: "Processing", icon: Loader2, className: "text-brand-500" },
+  extracted: { label: "Ready", icon: CheckCircle2, className: "text-emerald-600" },
+  failed: { label: "Failed", icon: XCircle, className: "text-rose-500" },
+};
 
 async function call<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, options);
@@ -25,6 +32,11 @@ async function call<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!res.ok) throw new Error(data?.error || "Something went wrong.");
   return data as T;
 }
+
+type Row =
+  | { kind: "pdf"; pdf: PdfOut }
+  | { kind: "topic"; topic: Topic }
+  | { kind: "empty" };
 
 export default function LibraryManager({
   initialSubjects,
@@ -38,7 +50,6 @@ export default function LibraryManager({
   const [subjects, setSubjects] = useState(initialSubjects);
   const [topicsBySubject, setTopicsBySubject] = useState(initialTopicsBySubject);
   const [pdfs, setPdfs] = useState(initialPdfs);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [addingSubject, setAddingSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState("");
@@ -46,16 +57,8 @@ export default function LibraryManager({
   const [addingTopicFor, setAddingTopicFor] = useState<string | null>(null);
   const [newTopicName, setNewTopicName] = useState("");
   const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
-  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
-
-  function toggleExpanded(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   async function guarded(fn: () => Promise<void>) {
     try {
@@ -96,10 +99,13 @@ export default function LibraryManager({
   }
 
   async function deleteSubject(id: string) {
+    setBusyId(id);
     await guarded(async () => {
       await call<void>(`/api/subjects/${id}`, { method: "DELETE" });
       setSubjects((prev) => prev.filter((s) => s.id !== id));
     });
+    setBusyId(null);
+    setConfirmingDeleteId(null);
   }
 
   async function moveSubject(id: string, direction: -1 | 1) {
@@ -141,22 +147,8 @@ export default function LibraryManager({
     });
   }
 
-  async function renameTopic(subjectId: string, topicId: string, name: string) {
-    await guarded(async () => {
-      const topic = await call<Topic>(`/api/subjects/topics/${topicId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      setTopicsBySubject((prev) => ({
-        ...prev,
-        [subjectId]: prev[subjectId].map((t) => (t.id === topicId ? topic : t)),
-      }));
-      setEditingTopicId(null);
-    });
-  }
-
   async function deleteTopic(subjectId: string, topicId: string) {
+    setBusyId(topicId);
     await guarded(async () => {
       await call<void>(`/api/subjects/topics/${topicId}`, { method: "DELETE" });
       setTopicsBySubject((prev) => ({
@@ -164,33 +156,18 @@ export default function LibraryManager({
         [subjectId]: prev[subjectId].filter((t) => t.id !== topicId),
       }));
     });
-  }
-
-  async function moveTopic(subjectId: string, topicId: string, direction: -1 | 1) {
-    const topics = topicsBySubject[subjectId] ?? [];
-    const idx = topics.findIndex((t) => t.id === topicId);
-    const swapWith = topics[idx + direction];
-    if (!swapWith) return;
-    const a = topics[idx];
-    const b = swapWith;
-    await guarded(async () => {
-      const updated = await call<Topic[]>(`/api/subjects/${subjectId}/topics/reorder`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify([
-          { id: a.id, sort_order: b.sort_order },
-          { id: b.id, sort_order: a.sort_order },
-        ]),
-      });
-      setTopicsBySubject((prev) => ({ ...prev, [subjectId]: updated }));
-    });
+    setBusyId(null);
+    setConfirmingDeleteId(null);
   }
 
   async function deletePdf(pdfId: string) {
+    setBusyId(pdfId);
     await guarded(async () => {
       await call<void>(`/api/pdfs/${pdfId}`, { method: "DELETE" });
       setPdfs((prev) => prev.filter((p) => p.id !== pdfId));
     });
+    setBusyId(null);
+    setConfirmingDeleteId(null);
   }
 
   async function setPdfContentType(pdfId: string, contentType: "theory" | "practice") {
@@ -219,23 +196,16 @@ export default function LibraryManager({
         subject_name: null,
         question_count: 0,
         uploaded_at: new Date().toISOString(),
+        topics: [],
       },
       ...prev,
     ]);
   }
 
   const unsortedPdfs = pdfs.filter((p) => p.subject_id === null);
-
-  const groups: { grade: string; subjects: Subject[] }[] = [];
-  for (const s of subjects) {
-    const grade = s.grade_level || "Ungraded";
-    let g = groups.find((x) => x.grade === grade);
-    if (!g) {
-      g = { grade, subjects: [] };
-      groups.push(g);
-    }
-    g.subjects.push(s);
-  }
+  const sortedSubjects = [...subjects].sort(
+    (a, b) => (a.grade_level ?? "").localeCompare(b.grade_level ?? "") || a.sort_order - b.sort_order
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -249,188 +219,278 @@ export default function LibraryManager({
         </div>
       )}
 
-      <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 font-semibold text-zinc-700">Upload worksheets</h3>
-        <UploadDropzone subjects={subjects} onUploaded={onPdfUploaded} />
-      </div>
+      <UploadDropzone subjects={subjects} onUploaded={onPdfUploaded} />
 
       {unsortedPdfs.length > 0 && (
-        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 text-sm font-semibold text-zinc-500">Unsorted (still detecting subject)</h3>
-          <PdfList pdfs={unsortedPdfs} onDelete={deletePdf} onSetContentType={setPdfContentType} />
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+          {unsortedPdfs.length} worksheet{unsortedPdfs.length === 1 ? "" : "s"} still detecting subject — refresh
+          in a moment to see {unsortedPdfs.length === 1 ? "it" : "them"} in the table below.
         </div>
       )}
 
       {!addingSubject ? (
         <button
           onClick={() => setAddingSubject(true)}
-          className="flex items-center gap-1.5 self-start rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-500 transition hover:border-indigo-300 hover:text-indigo-600"
+          className="flex items-center gap-1.5 self-start rounded-full border border-dashed border-brand-200 px-4 py-2 text-sm font-medium text-brand-600 transition hover:border-brand-400 hover:bg-brand-50"
         >
           <Plus className="h-4 w-4" strokeWidth={2.2} />
           Add a subject
         </button>
       ) : (
-        <form onSubmit={handleAddSubject} className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-white p-3">
+        <form onSubmit={handleAddSubject} className="flex flex-wrap items-center gap-2 rounded-xl border border-brand-100 bg-white p-3">
           <input
             autoFocus
             required
             placeholder="e.g. RSM Grade 8"
             value={newSubjectName}
             onChange={(e) => setNewSubjectName(e.target.value)}
-            className="min-w-[10rem] flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+            className="min-w-[10rem] flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
           />
           <input
             list="grade-options"
             placeholder="Grade (e.g. 8, SAT)"
             value={newSubjectGrade}
             onChange={(e) => setNewSubjectGrade(e.target.value)}
-            className="w-40 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+            className="w-40 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
           />
           <datalist id="grade-options">
             {GRADE_OPTIONS.map((g) => (
               <option key={g} value={g} />
             ))}
           </datalist>
-          <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+          <button type="submit" className="rounded-full bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">
             Add
           </button>
-          <button type="button" onClick={() => setAddingSubject(false)} className="rounded-lg px-3 py-2 text-sm text-zinc-500 hover:text-zinc-700">
+          <button type="button" onClick={() => setAddingSubject(false)} className="rounded-full px-4 py-2 text-sm text-zinc-500 hover:text-zinc-700">
             Cancel
           </button>
         </form>
       )}
 
-      {groups.map((group) => (
-        <section key={group.grade}>
-          <h2 className="mb-3 text-sm font-semibold tracking-wide text-zinc-400 uppercase">
-            {group.grade === "Ungraded" ? "Ungraded" : `Grade ${group.grade}`}
-          </h2>
-          <div className="flex flex-col gap-3">
-            {group.subjects.map((subject, idx) => {
-              const isExpanded = expanded.has(subject.id);
+      <div className="overflow-x-auto rounded-2xl border border-brand-100 bg-white shadow-sm">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-brand-100 bg-brand-50/60 text-left text-xs font-semibold tracking-wide text-navy-700 uppercase">
+              <th className="px-4 py-3">Grade</th>
+              <th className="px-4 py-3">Subject</th>
+              <th className="px-4 py-3">Topic</th>
+              <th className="px-4 py-3">Worksheet</th>
+              <th className="px-4 py-3">Theory / Practice</th>
+              <th className="px-4 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedSubjects.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-10 text-center text-zinc-400">
+                  No subjects yet — add one above to get started.
+                </td>
+              </tr>
+            )}
+            {sortedSubjects.map((subject) => {
               const topics = topicsBySubject[subject.id] ?? [];
               const subjectPdfs = pdfs.filter((p) => p.subject_id === subject.id);
-              return (
-                <div key={subject.id} className="rounded-2xl border border-zinc-200 bg-white shadow-sm">
-                  <div className="flex items-center gap-2 px-4 py-3">
-                    <button onClick={() => toggleExpanded(subject.id)} className="text-zinc-400 hover:text-zinc-700">
-                      {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                    </button>
-                    {editingSubjectId === subject.id ? (
-                      <SubjectEditForm
-                        subject={subject}
-                        onSave={(name, grade) => renameSubject(subject.id, name, grade)}
-                        onCancel={() => setEditingSubjectId(null)}
-                      />
-                    ) : (
-                      <>
-                        <button onClick={() => toggleExpanded(subject.id)} className="flex-1 text-left font-medium text-zinc-800">
-                          {subject.name}
-                        </button>
-                        <span className="text-xs text-zinc-400">
-                          {topics.length} topic{topics.length === 1 ? "" : "s"} · {subjectPdfs.length} PDF{subjectPdfs.length === 1 ? "" : "s"}
-                        </span>
-                        <div className="flex items-center gap-0.5">
-                          <button disabled={idx === 0} onClick={() => moveSubject(subject.id, -1)} className="rounded p-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-30">
-                            <ArrowUp className="h-3.5 w-3.5" strokeWidth={2} />
-                          </button>
-                          <button
-                            disabled={idx === group.subjects.length - 1}
-                            onClick={() => moveSubject(subject.id, 1)}
-                            className="rounded p-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-30"
-                          >
-                            <ArrowDown className="h-3.5 w-3.5" strokeWidth={2} />
-                          </button>
-                          <button onClick={() => setEditingSubjectId(subject.id)} className="rounded p-1 text-zinc-400 hover:text-indigo-600">
-                            <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
-                          </button>
-                          <button onClick={() => deleteSubject(subject.id)} className="rounded p-1 text-zinc-400 hover:text-rose-500">
-                            <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
+              const coveredTopicIds = new Set(subjectPdfs.flatMap((p) => p.topics.map((t) => t.id)));
+              const orphanTopics = topics.filter((t) => !coveredTopicIds.has(t.id));
 
-                  {isExpanded && (
-                    <div className="border-t border-zinc-100 px-4 py-3">
-                      <h4 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">Topics</h4>
-                      <ul className="mb-3 flex flex-col gap-1">
-                        {topics.map((topic, tIdx) => (
-                          <li key={topic.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
-                            {editingTopicId === topic.id ? (
-                              <TopicEditForm
-                                topic={topic}
-                                onSave={(name) => renameTopic(subject.id, topic.id, name)}
-                                onCancel={() => setEditingTopicId(null)}
-                              />
-                            ) : (
-                              <>
-                                <span className="flex-1 text-sm text-zinc-700">{topic.name}</span>
-                                <button disabled={tIdx === 0} onClick={() => moveTopic(subject.id, topic.id, -1)} className="rounded p-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-30">
-                                  <ArrowUp className="h-3 w-3" strokeWidth={2} />
-                                </button>
-                                <button
-                                  disabled={tIdx === topics.length - 1}
-                                  onClick={() => moveTopic(subject.id, topic.id, 1)}
-                                  className="rounded p-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-30"
-                                >
-                                  <ArrowDown className="h-3 w-3" strokeWidth={2} />
-                                </button>
-                                <button onClick={() => setEditingTopicId(topic.id)} className="rounded p-1 text-zinc-400 hover:text-indigo-600">
-                                  <Pencil className="h-3 w-3" strokeWidth={2} />
-                                </button>
-                                <button onClick={() => deleteTopic(subject.id, topic.id)} className="rounded p-1 text-zinc-400 hover:text-rose-500">
-                                  <Trash2 className="h-3 w-3" strokeWidth={2} />
-                                </button>
-                              </>
-                            )}
-                          </li>
-                        ))}
-                        {topics.length === 0 && <p className="px-2 py-1 text-sm text-zinc-400">No topics yet.</p>}
-                      </ul>
+              const rows: Row[] = [
+                ...subjectPdfs.map((pdf): Row => ({ kind: "pdf", pdf })),
+                ...orphanTopics.map((topic): Row => ({ kind: "topic", topic })),
+              ];
+              if (rows.length === 0) rows.push({ kind: "empty" });
 
-                      {addingTopicFor === subject.id ? (
-                        <form onSubmit={(e) => handleAddTopic(subject.id, e)} className="mb-4 flex gap-2">
-                          <input
-                            autoFocus
-                            required
-                            placeholder="e.g. Compound Inequalities"
-                            value={newTopicName}
-                            onChange={(e) => setNewTopicName(e.target.value)}
-                            className="flex-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
-                          />
-                          <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700">
-                            Add
-                          </button>
-                          <button type="button" onClick={() => setAddingTopicFor(null)} className="rounded-lg px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-700">
-                            Cancel
-                          </button>
-                        </form>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setAddingTopicFor(subject.id);
-                            setNewTopicName("");
-                          }}
-                          className="mb-4 flex items-center gap-1 text-xs font-medium text-indigo-500 hover:text-indigo-700"
-                        >
-                          <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
-                          Add topic
-                        </button>
-                      )}
-
-                      <h4 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">Worksheets</h4>
-                      <PdfList pdfs={subjectPdfs} onDelete={deletePdf} onSetContentType={setPdfContentType} />
-                    </div>
+              return rows.map((row, i) => (
+                <tr key={`${subject.id}-${i}`} className="border-b border-zinc-100 last:border-0 hover:bg-brand-50/30">
+                  {i === 0 && (
+                    <td rowSpan={rows.length} className="border-r border-zinc-100 px-4 py-3 align-top font-medium text-zinc-600">
+                      {subject.grade_level || "—"}
+                    </td>
                   )}
-                </div>
-              );
+                  {i === 0 && (
+                    <td rowSpan={rows.length} className="border-r border-zinc-100 px-4 py-3 align-top">
+                      {editingSubjectId === subject.id ? (
+                        <SubjectEditForm
+                          subject={subject}
+                          onSave={(name, grade) => renameSubject(subject.id, name, grade)}
+                          onCancel={() => setEditingSubjectId(null)}
+                        />
+                      ) : (
+                        <div>
+                          <p className="font-semibold text-navy-900">{subject.name}</p>
+                          <div className="mt-1.5 flex items-center gap-1">
+                            <button title="Move up" onClick={() => moveSubject(subject.id, -1)} className="rounded p-1 text-zinc-400 hover:text-brand-600">
+                              <ArrowUp className="h-3 w-3" strokeWidth={2} />
+                            </button>
+                            <button title="Move down" onClick={() => moveSubject(subject.id, 1)} className="rounded p-1 text-zinc-400 hover:text-brand-600">
+                              <ArrowDown className="h-3 w-3" strokeWidth={2} />
+                            </button>
+                            <button title="Edit subject" onClick={() => setEditingSubjectId(subject.id)} className="rounded p-1 text-zinc-400 hover:text-brand-600">
+                              <Pencil className="h-3 w-3" strokeWidth={2} />
+                            </button>
+                            {addingTopicFor === subject.id ? (
+                              <form onSubmit={(e) => handleAddTopic(subject.id, e)} className="ml-1 flex items-center gap-1">
+                                <input
+                                  autoFocus
+                                  required
+                                  placeholder="Topic name"
+                                  value={newTopicName}
+                                  onChange={(e) => setNewTopicName(e.target.value)}
+                                  className="w-32 rounded border border-zinc-300 px-1.5 py-0.5 text-xs focus:border-brand-400 focus:outline-none"
+                                />
+                                <button type="submit" className="text-xs font-semibold text-brand-600 hover:text-brand-700">
+                                  Add
+                                </button>
+                                <button type="button" onClick={() => setAddingTopicFor(null)} className="text-xs text-zinc-400 hover:text-zinc-600">
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </form>
+                            ) : (
+                              <button
+                                title="Add topic"
+                                onClick={() => {
+                                  setAddingTopicFor(subject.id);
+                                  setNewTopicName("");
+                                }}
+                                className="rounded p-1 text-zinc-400 hover:text-brand-600"
+                              >
+                                <Plus className="h-3 w-3" strokeWidth={2} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </td>
+                  )}
+
+                  {row.kind === "pdf" && (
+                    <>
+                      <td className="px-4 py-3 text-zinc-700">
+                        {row.pdf.topics.length > 0 ? row.pdf.topics.map((t) => t.name).join(", ") : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <PdfCell pdf={row.pdf} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          value={row.pdf.content_type}
+                          disabled={busyId === row.pdf.id}
+                          onChange={(e) => setPdfContentType(row.pdf.id, e.target.value as "theory" | "practice")}
+                          className="rounded-full border border-zinc-200 bg-white px-2 py-1 text-xs font-medium text-zinc-600"
+                        >
+                          <option value="practice">Practice</option>
+                          <option value="theory">Theory</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <DeleteAction
+                          id={row.pdf.id}
+                          busy={busyId === row.pdf.id}
+                          confirming={confirmingDeleteId === row.pdf.id}
+                          onConfirm={() => setConfirmingDeleteId(row.pdf.id)}
+                          onCancel={() => setConfirmingDeleteId(null)}
+                          onDelete={() => deletePdf(row.pdf.id)}
+                        />
+                      </td>
+                    </>
+                  )}
+
+                  {row.kind === "topic" && (
+                    <>
+                      <td className="px-4 py-3 text-zinc-700">{row.topic.name}</td>
+                      <td className="px-4 py-3 text-zinc-400 italic">No worksheets yet</td>
+                      <td className="px-4 py-3 text-zinc-300">—</td>
+                      <td className="px-4 py-3 text-right">
+                        <DeleteAction
+                          id={row.topic.id}
+                          busy={busyId === row.topic.id}
+                          confirming={confirmingDeleteId === row.topic.id}
+                          onConfirm={() => setConfirmingDeleteId(row.topic.id)}
+                          onCancel={() => setConfirmingDeleteId(null)}
+                          onDelete={() => deleteTopic(subject.id, row.topic.id)}
+                        />
+                      </td>
+                    </>
+                  )}
+
+                  {row.kind === "empty" && (
+                    <>
+                      <td className="px-4 py-3 text-zinc-300">—</td>
+                      <td className="px-4 py-3 text-zinc-400 italic">No worksheets yet</td>
+                      <td className="px-4 py-3 text-zinc-300">—</td>
+                      <td className="px-4 py-3 text-right">
+                        <DeleteAction
+                          id={subject.id}
+                          busy={busyId === subject.id}
+                          confirming={confirmingDeleteId === subject.id}
+                          onConfirm={() => setConfirmingDeleteId(subject.id)}
+                          onCancel={() => setConfirmingDeleteId(null)}
+                          onDelete={() => deleteSubject(subject.id)}
+                        />
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ));
             })}
-          </div>
-        </section>
-      ))}
+          </tbody>
+        </table>
+      </div>
     </div>
+  );
+}
+
+function PdfCell({ pdf }: { pdf: PdfOut }) {
+  const meta = STATUS_META[pdf.status] ?? { label: pdf.status, icon: Loader2, className: "text-zinc-500" };
+  const StatusIcon = meta.icon;
+  const spinning = pdf.status === "pending" || pdf.status === "processing";
+  return (
+    <div>
+      <p className="font-medium text-zinc-700">{pdf.original_name}</p>
+      <p className={`flex items-center gap-1 text-xs ${meta.className}`}>
+        <StatusIcon className={`h-3 w-3 ${spinning ? "animate-spin" : ""}`} />
+        {meta.label}
+        {pdf.status === "extracted" && ` · ${pdf.question_count} question${pdf.question_count === 1 ? "" : "s"}`}
+      </p>
+      {pdf.status === "failed" && pdf.error_message && <p className="text-xs text-rose-500">{pdf.error_message}</p>}
+    </div>
+  );
+}
+
+function DeleteAction({
+  id,
+  busy,
+  confirming,
+  onConfirm,
+  onCancel,
+  onDelete,
+}: {
+  id: string;
+  busy: boolean;
+  confirming: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  if (confirming) {
+    return (
+      <div className="flex items-center justify-end gap-1.5">
+        <button
+          disabled={busy}
+          onClick={onDelete}
+          className="rounded-full bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+        >
+          {busy ? "Deleting…" : "Confirm"}
+        </button>
+        <button onClick={onCancel} className="rounded-full px-2 py-1 text-xs text-zinc-500 hover:text-zinc-700">
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button title="Delete" onClick={onConfirm} className="rounded p-1.5 text-zinc-400 transition hover:bg-rose-50 hover:text-rose-500" data-id={id}>
+      <Trash2 className="h-4 w-4" strokeWidth={2} />
+    </button>
   );
 }
 
@@ -451,61 +511,29 @@ function SubjectEditForm({
         e.preventDefault();
         onSave(name.trim(), grade.trim());
       }}
-      className="flex flex-1 items-center gap-2"
+      className="flex flex-col gap-1.5"
     >
       <input
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="flex-1 rounded-lg border border-zinc-300 px-2 py-1 text-sm focus:border-indigo-400 focus:outline-none"
+        className="rounded border border-zinc-300 px-2 py-1 text-sm focus:border-brand-400 focus:outline-none"
       />
       <input
         list="grade-options"
         value={grade}
         onChange={(e) => setGrade(e.target.value)}
         placeholder="Grade"
-        className="w-28 rounded-lg border border-zinc-300 px-2 py-1 text-sm focus:border-indigo-400 focus:outline-none"
+        className="w-28 rounded border border-zinc-300 px-2 py-1 text-sm focus:border-brand-400 focus:outline-none"
       />
-      <button type="submit" className="rounded-lg bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-700">
-        Save
-      </button>
-      <button type="button" onClick={onCancel} className="rounded-lg px-2 py-1 text-xs text-zinc-500 hover:text-zinc-700">
-        Cancel
-      </button>
-    </form>
-  );
-}
-
-function TopicEditForm({
-  topic,
-  onSave,
-  onCancel,
-}: {
-  topic: Topic;
-  onSave: (name: string) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(topic.name);
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSave(name.trim());
-      }}
-      className="flex flex-1 items-center gap-2"
-    >
-      <input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        className="flex-1 rounded-lg border border-zinc-300 px-2 py-1 text-sm focus:border-indigo-400 focus:outline-none"
-      />
-      <button type="submit" className="rounded-lg bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-700">
-        Save
-      </button>
-      <button type="button" onClick={onCancel} className="rounded-lg px-2 py-1 text-xs text-zinc-500 hover:text-zinc-700">
-        Cancel
-      </button>
+      <div className="flex gap-1.5">
+        <button type="submit" className="rounded-full bg-brand-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-brand-600">
+          Save
+        </button>
+        <button type="button" onClick={onCancel} className="rounded-full px-2.5 py-1 text-xs text-zinc-500 hover:text-zinc-700">
+          Cancel
+        </button>
+      </div>
     </form>
   );
 }

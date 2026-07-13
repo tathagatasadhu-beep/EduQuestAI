@@ -112,6 +112,8 @@ export type PdfUploadOut = {
   error_message: string | null;
 };
 
+export type PdfTopic = { id: string; name: string };
+
 export type PdfOut = {
   id: string;
   original_name: string;
@@ -122,6 +124,7 @@ export type PdfOut = {
   subject_name: string | null;
   question_count: number;
   uploaded_at: string;
+  topics: PdfTopic[];
 };
 
 export const api = {

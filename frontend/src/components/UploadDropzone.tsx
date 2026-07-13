@@ -25,7 +25,7 @@ const AUTO_DETECT = "__auto__";
 
 const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
   pending: { label: "Queued...", icon: Loader2, className: "text-zinc-500" },
-  processing: { label: "Reading the worksheet and extracting questions...", icon: Loader2, className: "text-indigo-500" },
+  processing: { label: "Reading the worksheet and extracting questions...", icon: Loader2, className: "text-brand-500" },
   extracted: { label: "Done — questions added to the library.", icon: CheckCircle2, className: "text-emerald-600" },
   failed: { label: "Something went wrong processing this file.", icon: XCircle, className: "text-rose-500" },
 };
@@ -161,9 +161,9 @@ export default function UploadDropzone({
   }
 
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm">
       <h3 className="mb-3 flex items-center gap-2 font-semibold text-zinc-700">
-        <FileText className="h-4 w-4 text-indigo-500" strokeWidth={2.2} />
+        <FileText className="h-4 w-4 text-brand-500" strokeWidth={2.2} />
         Upload worksheets (PDF)
       </h3>
 
@@ -172,7 +172,7 @@ export default function UploadDropzone({
           <select
             value={subjectId}
             onChange={(e) => setSubjectId(e.target.value)}
-            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
           >
             <option value={AUTO_DETECT}>✨ Auto-detect subject</option>
             {localSubjects.map((s) => (
@@ -185,7 +185,7 @@ export default function UploadDropzone({
             value={contentType}
             onChange={(e) => setContentType(e.target.value as "theory" | "practice")}
             title="Is this worksheet theory/explanation or practice questions?"
-            className="shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+            className="shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
           >
             <option value="practice">Practice</option>
             <option value="theory">Theory</option>
@@ -193,7 +193,7 @@ export default function UploadDropzone({
           <button
             title="Add a subject"
             onClick={() => setAddingSubject(true)}
-            className="flex shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 p-2 text-zinc-500 transition hover:border-indigo-300 hover:text-indigo-600"
+            className="flex shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 p-2 text-zinc-500 transition hover:border-brand-300 hover:text-brand-600"
           >
             <Plus className="h-4 w-4" strokeWidth={2.2} />
           </button>
@@ -201,7 +201,7 @@ export default function UploadDropzone({
       )}
 
       {subjectId === AUTO_DETECT && !addingSubject && (
-        <p className="mb-3 flex items-center gap-1.5 text-xs text-indigo-500">
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-brand-500">
           <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
           The subject and topics will be detected automatically from each file.
         </p>
@@ -215,9 +215,9 @@ export default function UploadDropzone({
             placeholder="e.g. AP Calculus"
             value={newSubjectName}
             onChange={(e) => setNewSubjectName(e.target.value)}
-            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
           />
-          <button type="submit" className="shrink-0 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+          <button type="submit" className="shrink-0 rounded-lg bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
             Add
           </button>
           <button
@@ -243,7 +243,7 @@ export default function UploadDropzone({
         }}
         onClick={() => inputRef.current?.click()}
         className={`flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center text-sm transition
-          ${dragOver ? "border-indigo-400 bg-indigo-50" : "border-zinc-300 hover:border-indigo-300 hover:bg-zinc-50"}`}
+          ${dragOver ? "border-brand-400 bg-brand-50" : "border-zinc-300 hover:border-brand-300 hover:bg-zinc-50"}`}
       >
         <input
           ref={inputRef}
@@ -269,7 +269,7 @@ export default function UploadDropzone({
               u.state.phase === "tracking"
                 ? STATUS_META[u.state.status] ?? { label: u.state.status, icon: Loader2, className: "text-zinc-500" }
                 : u.state.phase === "uploading"
-                  ? { label: "Uploading...", icon: Loader2, className: "text-indigo-500" }
+                  ? { label: "Uploading...", icon: Loader2, className: "text-brand-500" }
                   : { label: u.state.message, icon: XCircle, className: "text-rose-500" };
             const StatusIcon = meta.icon;
             const spinning = u.state.phase === "uploading" || (u.state.phase === "tracking" && StatusIcon === Loader2);

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.supabase_client import get_supabase_admin
 from app.db.orm import AnswerKey, Pdf, Question, Subject, Topic
 from app.db.session import SessionLocal, get_db
-from app.models.schemas import PdfOut, PdfUpdate, PdfUploadOut
+from app.models.schemas import PdfOut, PdfTopicOut, PdfUpdate, PdfUploadOut
 from app.routers.auth import get_current_parent_id
 
 # ai-engine/ is a sibling of backend/ with a hyphen in its name, so it can't be
@@ -106,6 +106,26 @@ async def upload_pdf(
     return _upload_out(pdf)
 
 
+async def _topics_by_pdf(db: AsyncSession, pdf_ids: list[UUID]) -> dict[UUID, list[PdfTopicOut]]:
+    """A worksheet's questions can span more than one topic — used to show
+    each PDF's topic(s) in the library table without a separate topic-per-PDF
+    concept existing in the schema."""
+    if not pdf_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Question.pdf_id, Topic.id, Topic.name)
+            .join(Topic, Topic.id == Question.topic_id)
+            .where(Question.pdf_id.in_(pdf_ids))
+            .distinct()
+        )
+    ).all()
+    by_pdf: dict[UUID, list[PdfTopicOut]] = {}
+    for pdf_id, topic_id, topic_name in rows:
+        by_pdf.setdefault(pdf_id, []).append(PdfTopicOut(id=topic_id, name=topic_name))
+    return by_pdf
+
+
 @router.get("", response_model=list[PdfOut])
 async def list_pdfs(
     db: AsyncSession = Depends(get_db),
@@ -121,12 +141,14 @@ async def list_pdfs(
             .order_by(Pdf.uploaded_at.desc())
         )
     ).all()
+    topics_by_pdf = await _topics_by_pdf(db, [pdf.id for pdf, _, _ in rows])
     return [
         PdfOut(
             id=pdf.id, original_name=pdf.original_name, status=pdf.status,
             error_message=pdf.error_message, content_type=pdf.content_type,
             subject_id=pdf.subject_id, subject_name=subject_name,
             question_count=question_count, uploaded_at=pdf.uploaded_at,
+            topics=topics_by_pdf.get(pdf.id, []),
         )
         for pdf, subject_name, question_count in rows
     ]
@@ -162,11 +184,13 @@ async def update_pdf(
     question_count = (
         await db.execute(select(func.count(Question.id)).where(Question.pdf_id == pdf.id))
     ).scalar_one()
+    topics = (await _topics_by_pdf(db, [pdf.id])).get(pdf.id, [])
     return PdfOut(
         id=pdf.id, original_name=pdf.original_name, status=pdf.status,
         error_message=pdf.error_message, content_type=pdf.content_type,
         subject_id=pdf.subject_id, subject_name=subject_name,
         question_count=question_count, uploaded_at=pdf.uploaded_at,
+        topics=topics,
     )
 
 

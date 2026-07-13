@@ -24,9 +24,9 @@ export default async function LibraryPage() {
   const topicsBySubject = Object.fromEntries(topicEntries);
 
   return (
-    <div className="min-h-full bg-zinc-50">
-      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center gap-3 px-6 py-4">
+    <div className="min-h-full bg-parent-bg">
+      <header className="sticky top-0 z-10 border-b border-brand-100 bg-white/80 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-4">
           <Link
             href="/parent"
             className="flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-800"
@@ -36,14 +36,14 @@ export default async function LibraryPage() {
           </Link>
           <span className="text-zinc-300">/</span>
           <div className="flex items-center gap-2">
-            <BookOpen className="h-4 w-4 text-indigo-500" strokeWidth={2.2} />
-            <span className="font-semibold text-zinc-800">Library</span>
+            <BookOpen className="h-4 w-4 text-brand-500" strokeWidth={2.2} />
+            <span className="font-semibold text-navy-900">Library</span>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-4xl px-6 py-10">
-        <h1 className="mb-2 text-2xl font-bold text-zinc-900">Worksheet Library</h1>
+      <div className="mx-auto max-w-5xl px-6 py-10">
+        <h1 className="mb-2 text-2xl font-bold text-navy-900">Worksheet Library</h1>
         <p className="mb-8 text-sm text-zinc-500">
           Organize subjects and topics by grade, and manage the worksheets uploaded into each one.
         </p>

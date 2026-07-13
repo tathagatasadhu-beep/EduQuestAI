@@ -10,7 +10,7 @@ import StreakBadge from "@/components/StreakBadge";
 import XPBar from "@/components/XPBar";
 
 const AVATAR_COLORS = [
-  "bg-indigo-500",
+  "bg-brand-500",
   "bg-pink-500",
   "bg-amber-500",
   "bg-emerald-500",
@@ -64,12 +64,12 @@ export default async function ParentDashboardPage() {
   const assignmentsByStudent = new Map(assignmentEntries);
 
   return (
-    <div className="min-h-full bg-zinc-50">
-      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur">
+    <div className="min-h-full bg-parent-bg">
+      <header className="sticky top-0 z-10 border-b border-brand-100 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-indigo-500" strokeWidth={2.2} />
-            <span className="font-bold text-zinc-800">EduQuestAI</span>
+            <Sparkles className="h-5 w-5 text-brand-500" strokeWidth={2.2} />
+            <span className="font-bold text-navy-900">EduQuestAI</span>
           </div>
           <div className="flex items-center gap-4">
             <Link href="/parent/library" className="text-sm font-medium text-zinc-500 hover:text-zinc-800">
@@ -81,10 +81,10 @@ export default async function ParentDashboardPage() {
       </header>
 
       <div className="mx-auto max-w-4xl px-6 py-10">
-        <h1 className="mb-8 text-2xl font-bold text-zinc-900">Parent Dashboard</h1>
+        <h1 className="mb-8 text-2xl font-bold text-navy-900">Parent Dashboard</h1>
 
         <section className="mb-10">
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-zinc-400 uppercase">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-navy-600 uppercase">
             <Users className="h-4 w-4" strokeWidth={2.2} />
             Students
           </h2>
@@ -97,7 +97,7 @@ export default async function ParentDashboardPage() {
               return (
                 <div
                   key={s.id}
-                  className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:shadow-md"
+                  className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition hover:shadow-md"
                 >
                   <div className="mb-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -132,13 +132,13 @@ export default async function ParentDashboardPage() {
         </section>
 
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-zinc-400 uppercase">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-navy-600 uppercase">
             <BookOpen className="h-4 w-4" strokeWidth={2.2} />
             Worksheet Library
           </h2>
           <Link
             href="/parent/library"
-            className="flex items-center justify-between rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:shadow-md"
+            className="flex items-center justify-between rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition hover:shadow-md"
           >
             <div>
               <p className="font-semibold text-zinc-800">
@@ -146,7 +146,7 @@ export default async function ParentDashboardPage() {
               </p>
               <p className="text-sm text-zinc-500">Upload worksheets, organize by grade, and manage what&apos;s assigned to each student.</p>
             </div>
-            <span className="text-sm font-medium text-indigo-600">Manage library →</span>
+            <span className="text-sm font-medium text-brand-600">Manage library →</span>
           </Link>
         </section>
       </div>
