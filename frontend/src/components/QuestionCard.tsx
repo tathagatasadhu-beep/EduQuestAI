@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { BookmarkPlus, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import type { AttemptResult, QuestionOut } from "@/lib/api";
+import MathKeyboard, { type MathToken } from "@/components/MathKeyboard";
 
 export default function QuestionCard({
   question,
@@ -17,9 +18,31 @@ export default function QuestionCard({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<AttemptResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const isMultipleChoice = question.question_type === "multiple_choice";
   const answered = result !== null;
+
+  function handleInsert(token: MathToken) {
+    const el = inputRef.current;
+    const next = token.replace
+      ? token.insert
+      : answer.slice(0, el?.selectionStart ?? answer.length) + token.insert + answer.slice(el?.selectionEnd ?? answer.length);
+    const cursor = token.replace
+      ? next.length
+      : (el?.selectionStart ?? answer.length) + (token.cursorOffset ?? token.insert.length);
+
+    // Write to the DOM node directly (synchronously, no rAF) before calling setAnswer:
+    // React's controlled-input reconciler skips re-assigning `.value` when it already
+    // matches the DOM, so this lets our setSelectionRange survive the next render
+    // instead of racing it.
+    if (el) {
+      el.focus();
+      el.value = next;
+      el.setSelectionRange(cursor, cursor);
+    }
+    setAnswer(next);
+  }
 
   async function handleSubmit() {
     if (!answer || submitting) return;
@@ -83,14 +106,18 @@ export default function QuestionCard({
           })}
         </div>
       ) : (
-        <input
-          type="text"
-          disabled={answered}
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          placeholder="Type your answer..."
-          className="w-full rounded-xl border-2 border-zinc-200 px-4 py-3 font-medium focus:border-purple-400 focus:outline-none disabled:opacity-70"
-        />
+        <>
+          <input
+            ref={inputRef}
+            type="text"
+            disabled={answered}
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder="Type your answer..."
+            className="w-full rounded-xl border-2 border-zinc-200 px-4 py-3 font-medium focus:border-purple-400 focus:outline-none disabled:opacity-70"
+          />
+          {!answered && <MathKeyboard onInsert={handleInsert} />}
+        </>
       )}
 
       {error && <p className="mt-3 text-sm text-rose-500">{error}</p>}
