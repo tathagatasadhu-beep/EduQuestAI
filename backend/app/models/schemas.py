@@ -183,6 +183,15 @@ class PdfUpdate(BaseModel):
     content_type: Literal["theory", "practice"]
 
 
+class TheoryPdfOut(BaseModel):
+    id: UUID
+    original_name: str
+    uploaded_at: datetime
+    # A short-lived Supabase Storage signed URL — fetch this endpoint again
+    # once it expires rather than caching the link.
+    url: str
+
+
 class AssignmentCreate(BaseModel):
     subject_id: UUID
     topic_id: Optional[UUID] = None

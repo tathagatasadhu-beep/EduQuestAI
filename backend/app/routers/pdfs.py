@@ -24,10 +24,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.supabase_client import get_supabase_admin
-from app.db.orm import AnswerKey, Pdf, Question, Subject, Topic
+from app.db.orm import AnswerKey, Pdf, Question, StudentAssignment, Subject, Topic
 from app.db.session import SessionLocal, get_db
-from app.models.schemas import PdfOut, PdfTopicOut, PdfUpdate, PdfUploadOut
-from app.routers.auth import get_current_parent_id
+from app.models.schemas import PdfOut, PdfTopicOut, PdfUpdate, PdfUploadOut, TheoryPdfOut
+from app.routers.auth import get_current_parent_id, get_current_student
 
 # ai-engine/ is a sibling of backend/ with a hyphen in its name, so it can't be
 # imported as a package (`ai-engine.pipeline` isn't valid Python). Add its
@@ -157,6 +157,48 @@ async def list_pdfs(
         )
         for pdf, subject_name, question_count in rows
     ]
+
+
+@router.get("/theory", response_model=list[TheoryPdfOut])
+async def list_theory_pdfs_for_student(
+    subject_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    student: dict = Depends(get_current_student),
+):
+    """Reference materials — theory worksheets for a subject the student has
+    been assigned (any assignment row for the subject, whole-subject or a
+    specific topic, grants access to that subject's theory PDFs). Signed
+    URLs are generated fresh on each call since the storage bucket is
+    private and the URL only needs to last long enough for the student to
+    click it, not to be cached."""
+    student_id = student["student_id"]
+    assigned = (
+        await db.execute(
+            select(StudentAssignment.id)
+            .where(StudentAssignment.student_id == student_id, StudentAssignment.subject_id == subject_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if assigned is None:
+        raise HTTPException(status_code=403, detail="This subject isn't assigned to you.")
+
+    pdfs = (
+        await db.execute(
+            select(Pdf)
+            .where(Pdf.subject_id == subject_id, Pdf.content_type == "theory", Pdf.deleted_at.is_(None))
+            .order_by(Pdf.uploaded_at.desc())
+        )
+    ).scalars().all()
+
+    admin = get_supabase_admin()
+    results = []
+    for pdf in pdfs:
+        try:
+            signed = await asyncio.to_thread(admin.storage.from_(BUCKET).create_signed_url, pdf.storage_path, 600)
+        except Exception:
+            continue  # storage object missing/unreachable — skip rather than fail the whole list
+        results.append(TheoryPdfOut(id=pdf.id, original_name=pdf.original_name, uploaded_at=pdf.uploaded_at, url=signed["signedURL"]))
+    return results
 
 
 async def _get_owned_pdf_or_404(db: AsyncSession, pdf_id: UUID, parent_id: UUID) -> Pdf:

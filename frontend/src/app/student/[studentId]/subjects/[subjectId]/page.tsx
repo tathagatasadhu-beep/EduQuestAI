@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import { getStudentToken } from "@/lib/session";
 import ProgressTrail from "@/components/ProgressTrail";
+import ReferenceMaterials from "@/components/ReferenceMaterials";
 import TutorChat from "@/components/TutorChat";
 
 export default async function SubjectPage({
@@ -42,6 +43,8 @@ export default async function SubjectPage({
 
       <h1 className="mb-1 text-2xl font-bold text-zinc-800">{subject.name}</h1>
       {subject.grade_level && <p className="mb-5 text-sm text-zinc-400">Grade {subject.grade_level}</p>}
+
+      <ReferenceMaterials subjectId={subject.id} />
 
       <section className="mb-8">
         <TutorChat subjectId={subject.id} subjectName={subject.name} />

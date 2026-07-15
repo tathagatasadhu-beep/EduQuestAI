@@ -1,22 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
+  Search,
   Trash2,
   X,
   XCircle,
 } from "lucide-react";
-import type { PdfOut, PdfUploadOut, Subject, Topic } from "@/lib/api";
+import type { PdfOut, PdfTopic, PdfUploadOut, Subject, Topic } from "@/lib/api";
 import UploadDropzone from "@/components/UploadDropzone";
 
 const GRADE_OPTIONS = ["7", "8", "9", "10", "11", "12", "SSAT", "SAT"];
+const PAGE_SIZE = 5;
 
 const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
   pending: { label: "Queued", icon: Loader2, className: "text-zinc-500" },
@@ -57,8 +62,15 @@ export default function LibraryManager({
   const [addingTopicFor, setAddingTopicFor] = useState<string | null>(null);
   const [newTopicName, setNewTopicName] = useState("");
   const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [gradeFilter, setGradeFilter] = useState("");
+  const [contentTypeFilter, setContentTypeFilter] = useState<"all" | "theory" | "practice">("all");
+  const [page, setPage] = useState(0);
 
   async function guarded(fn: () => Promise<void>) {
     try {
@@ -67,6 +79,23 @@ export default function LibraryManager({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     }
+  }
+
+  async function refresh() {
+    setRefreshing(true);
+    await guarded(async () => {
+      const [freshSubjects, freshPdfs] = await Promise.all([
+        call<Subject[]>("/api/subjects"),
+        call<PdfOut[]>("/api/pdfs"),
+      ]);
+      const topicEntries = await Promise.all(
+        freshSubjects.map(async (s) => [s.id, await call<Topic[]>(`/api/subjects/${s.id}/topics`)] as const)
+      );
+      setSubjects(freshSubjects);
+      setPdfs(freshPdfs);
+      setTopicsBySubject(Object.fromEntries(topicEntries));
+    });
+    setRefreshing(false);
   }
 
   async function handleAddSubject(e: React.FormEvent) {
@@ -147,6 +176,29 @@ export default function LibraryManager({
     });
   }
 
+  async function renameTopic(subjectId: string, topicId: string, name: string) {
+    await guarded(async () => {
+      const topic = await call<Topic>(`/api/subjects/topics/${topicId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      setTopicsBySubject((prev) => ({
+        ...prev,
+        [subjectId]: (prev[subjectId] ?? []).map((t) => (t.id === topicId ? topic : t)),
+      }));
+      // A topic's name is also embedded (denormalized) in any PdfOut.topics
+      // it's attached to — keep those in sync too.
+      setPdfs((prev) =>
+        prev.map((p) => ({
+          ...p,
+          topics: p.topics.map((t) => (t.id === topicId ? { ...t, name: topic.name } : t)),
+        }))
+      );
+      setEditingTopicId(null);
+    });
+  }
+
   async function deleteTopic(subjectId: string, topicId: string) {
     setBusyId(topicId);
     await guarded(async () => {
@@ -155,6 +207,31 @@ export default function LibraryManager({
         ...prev,
         [subjectId]: prev[subjectId].filter((t) => t.id !== topicId),
       }));
+    });
+    setBusyId(null);
+    setConfirmingDeleteId(null);
+  }
+
+  async function deleteAllEmptyTopics() {
+    setBusyId("bulk-empty-topics");
+    await guarded(async () => {
+      const failures: string[] = [];
+      for (const subject of subjects) {
+        for (const topic of orphanTopicsFor(subject.id)) {
+          try {
+            await call<void>(`/api/subjects/topics/${topic.id}`, { method: "DELETE" });
+            setTopicsBySubject((prev) => ({
+              ...prev,
+              [subject.id]: prev[subject.id].filter((t) => t.id !== topic.id),
+            }));
+          } catch {
+            failures.push(topic.name);
+          }
+        }
+      }
+      if (failures.length > 0) {
+        throw new Error(`Couldn't delete: ${failures.join(", ")}`);
+      }
     });
     setBusyId(null);
     setConfirmingDeleteId(null);
@@ -184,7 +261,7 @@ export default function LibraryManager({
   function onPdfUploaded(pdf: PdfUploadOut) {
     // The new PDF's subject may still be auto-detecting — this list doesn't
     // poll for status changes itself, so it shows under "Unsorted" here
-    // until the page is refreshed once extraction finishes.
+    // until the parent hits Refresh once extraction finishes.
     setPdfs((prev) => [
       {
         id: pdf.id,
@@ -202,10 +279,45 @@ export default function LibraryManager({
     ]);
   }
 
+  function orphanTopicsFor(subjectId: string): Topic[] {
+    const topics = topicsBySubject[subjectId] ?? [];
+    const subjectPdfs = pdfs.filter((p) => p.subject_id === subjectId);
+    const coveredTopicIds = new Set(subjectPdfs.flatMap((p) => p.topics.map((t) => t.id)));
+    return topics.filter((t) => !coveredTopicIds.has(t.id));
+  }
+
+  const totalEmptyTopics = useMemo(
+    () => subjects.reduce((sum, s) => sum + orphanTopicsFor(s.id).length, 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- orphanTopicsFor reads subjects/topicsBySubject/pdfs directly
+    [subjects, topicsBySubject, pdfs]
+  );
+
   const unsortedPdfs = pdfs.filter((p) => p.subject_id === null);
   const sortedSubjects = [...subjects].sort(
     (a, b) => (a.grade_level ?? "").localeCompare(b.grade_level ?? "") || a.sort_order - b.sort_order
   );
+
+  const searchLower = search.trim().toLowerCase();
+  const filteredSubjects = sortedSubjects.filter((subject) => {
+    if (gradeFilter && (subject.grade_level ?? "") !== gradeFilter) return false;
+    if (!searchLower) return true;
+    const topics = topicsBySubject[subject.id] ?? [];
+    const subjectPdfs = pdfs.filter((p) => p.subject_id === subject.id);
+    return (
+      subject.name.toLowerCase().includes(searchLower) ||
+      topics.some((t) => t.name.toLowerCase().includes(searchLower)) ||
+      subjectPdfs.some((p) => p.original_name.toLowerCase().includes(searchLower))
+    );
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredSubjects.length / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages - 1);
+  const pageSubjects = filteredSubjects.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE);
+
+  function updateFilter(fn: () => void) {
+    fn();
+    setPage(0);
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -222,9 +334,19 @@ export default function LibraryManager({
       <UploadDropzone subjects={subjects} onUploaded={onPdfUploaded} />
 
       {unsortedPdfs.length > 0 && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-          {unsortedPdfs.length} worksheet{unsortedPdfs.length === 1 ? "" : "s"} still detecting subject — refresh
-          in a moment to see {unsortedPdfs.length === 1 ? "it" : "them"} in the table below.
+        <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+          <p className="flex-1">
+            {unsortedPdfs.length} worksheet{unsortedPdfs.length === 1 ? "" : "s"} still detecting subject — refresh
+            to see {unsortedPdfs.length === 1 ? "it" : "them"} in the table below.
+          </p>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} strokeWidth={2.2} />
+            Refresh
+          </button>
         </div>
       )}
 
@@ -267,6 +389,59 @@ export default function LibraryManager({
         </form>
       )}
 
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[12rem] flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-zinc-400" strokeWidth={2} />
+          <input
+            placeholder="Search subject, topic, or worksheet..."
+            value={search}
+            onChange={(e) => updateFilter(() => setSearch(e.target.value))}
+            className="w-full rounded-lg border border-zinc-300 py-2 pr-3 pl-9 text-sm focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
+          />
+        </div>
+        <select
+          value={gradeFilter}
+          onChange={(e) => updateFilter(() => setGradeFilter(e.target.value))}
+          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none"
+        >
+          <option value="">All grades</option>
+          {GRADE_OPTIONS.map((g) => (
+            <option key={g} value={g}>
+              Grade {g}
+            </option>
+          ))}
+        </select>
+        <select
+          value={contentTypeFilter}
+          onChange={(e) => updateFilter(() => setContentTypeFilter(e.target.value as "all" | "theory" | "practice"))}
+          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none"
+        >
+          <option value="all">Theory + Practice</option>
+          <option value="theory">Theory only</option>
+          <option value="practice">Practice only</option>
+        </select>
+        {totalEmptyTopics > 0 && (
+          <DeleteAction
+            id="bulk-empty-topics"
+            label={`Delete ${totalEmptyTopics} empty topic${totalEmptyTopics === 1 ? "" : "s"}`}
+            busy={busyId === "bulk-empty-topics"}
+            confirming={confirmingDeleteId === "bulk-empty-topics"}
+            onConfirm={() => setConfirmingDeleteId("bulk-empty-topics")}
+            onCancel={() => setConfirmingDeleteId(null)}
+            onDelete={deleteAllEmptyTopics}
+          />
+        )}
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          title="Refresh"
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-600 transition hover:border-brand-300 hover:text-brand-600 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} strokeWidth={2.2} />
+          Refresh
+        </button>
+      </div>
+
       <div className="overflow-x-auto rounded-2xl border border-brand-100 bg-white shadow-sm">
         <table className="w-full border-collapse text-sm">
           <thead>
@@ -280,16 +455,20 @@ export default function LibraryManager({
             </tr>
           </thead>
           <tbody>
-            {sortedSubjects.length === 0 && (
+            {pageSubjects.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-zinc-400">
-                  No subjects yet — add one above to get started.
+                  {sortedSubjects.length === 0
+                    ? "No subjects yet — add one above to get started."
+                    : "No subjects match your search/filters."}
                 </td>
               </tr>
             )}
-            {sortedSubjects.map((subject) => {
+            {pageSubjects.map((subject) => {
               const topics = topicsBySubject[subject.id] ?? [];
-              const subjectPdfs = pdfs.filter((p) => p.subject_id === subject.id);
+              const subjectPdfs = pdfs
+                .filter((p) => p.subject_id === subject.id)
+                .filter((p) => contentTypeFilter === "all" || p.content_type === contentTypeFilter);
               const coveredTopicIds = new Set(subjectPdfs.flatMap((p) => p.topics.map((t) => t.id)));
               const orphanTopics = topics.filter((t) => !coveredTopicIds.has(t.id));
 
@@ -365,7 +544,24 @@ export default function LibraryManager({
                   {row.kind === "pdf" && (
                     <>
                       <td className="px-4 py-3 text-zinc-700">
-                        {row.pdf.topics.length > 0 ? row.pdf.topics.map((t) => t.name).join(", ") : "—"}
+                        {row.pdf.topics.length > 0 ? (
+                          <div className="flex flex-wrap gap-x-1.5 gap-y-1">
+                            {row.pdf.topics.map((t, idx) => (
+                              <span key={t.id} className="inline-flex items-center">
+                                <EditableTopicName
+                                  topic={t}
+                                  editing={editingTopicId === t.id}
+                                  onEdit={() => setEditingTopicId(t.id)}
+                                  onCancel={() => setEditingTopicId(null)}
+                                  onSave={(name) => renameTopic(subject.id, t.id, name)}
+                                />
+                                {idx < row.pdf.topics.length - 1 && <span className="mr-1">,</span>}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <PdfCell pdf={row.pdf} />
@@ -396,7 +592,15 @@ export default function LibraryManager({
 
                   {row.kind === "topic" && (
                     <>
-                      <td className="px-4 py-3 text-zinc-700">{row.topic.name}</td>
+                      <td className="px-4 py-3 text-zinc-700">
+                        <EditableTopicName
+                          topic={row.topic}
+                          editing={editingTopicId === row.topic.id}
+                          onEdit={() => setEditingTopicId(row.topic.id)}
+                          onCancel={() => setEditingTopicId(null)}
+                          onSave={(name) => renameTopic(subject.id, row.topic.id, name)}
+                        />
+                      </td>
                       <td className="px-4 py-3 text-zinc-400 italic">No worksheets yet</td>
                       <td className="px-4 py-3 text-zinc-300">—</td>
                       <td className="px-4 py-3 text-right">
@@ -435,6 +639,28 @@ export default function LibraryManager({
           </tbody>
         </table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-3 text-sm text-zinc-500">
+          <button
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={clampedPage === 0}
+            className="flex items-center gap-1 rounded-lg border border-zinc-300 px-2.5 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronLeft className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+          <span>
+            Page {clampedPage + 1} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={clampedPage >= totalPages - 1}
+            className="flex items-center gap-1 rounded-lg border border-zinc-300 px-2.5 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronRight className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -458,6 +684,7 @@ function PdfCell({ pdf }: { pdf: PdfOut }) {
 
 function DeleteAction({
   id,
+  label,
   busy,
   confirming,
   onConfirm,
@@ -465,6 +692,7 @@ function DeleteAction({
   onDelete,
 }: {
   id: string;
+  label?: string;
   busy: boolean;
   confirming: boolean;
   onConfirm: () => void;
@@ -485,6 +713,18 @@ function DeleteAction({
           Cancel
         </button>
       </div>
+    );
+  }
+  if (label) {
+    return (
+      <button
+        onClick={onConfirm}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-600 transition hover:bg-rose-50"
+        data-id={id}
+      >
+        <Trash2 className="h-4 w-4" strokeWidth={2} />
+        {label}
+      </button>
     );
   }
   return (
@@ -535,5 +775,62 @@ function SubjectEditForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function EditableTopicName({
+  topic,
+  editing,
+  onEdit,
+  onCancel,
+  onSave,
+}: {
+  topic: PdfTopic | Topic;
+  editing: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: (name: string) => void;
+}) {
+  const [name, setName] = useState(topic.name);
+
+  if (editing) {
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) onSave(name.trim());
+        }}
+        className="inline-flex items-center gap-1"
+      >
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-28 rounded border border-zinc-300 px-1.5 py-0.5 text-xs focus:border-brand-400 focus:outline-none"
+        />
+        <button type="submit" className="text-xs font-semibold text-brand-600 hover:text-brand-700">
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setName(topic.name);
+            onCancel();
+          }}
+          className="text-xs text-zinc-400 hover:text-zinc-600"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <span className="group inline-flex items-center gap-1">
+      {topic.name}
+      <button title="Rename topic" onClick={onEdit} className="text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-brand-600">
+        <Pencil className="h-3 w-3" strokeWidth={2} />
+      </button>
+    </span>
   );
 }

@@ -117,6 +117,7 @@ export type PdfUploadOut = {
 };
 
 export type PdfTopic = { id: string; name: string };
+export type TheoryPdf = { id: string; original_name: string; uploaded_at: string; url: string };
 
 export type PdfOut = {
   id: string;
@@ -291,6 +292,8 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deletePdf: (token: string, pdfId: string) => request<void>(`/api/pdfs/${pdfId}`, { method: "DELETE", token }),
+  getTheoryPdfs: (token: string, subjectId: string) =>
+    request<TheoryPdf[]>(`/api/pdfs/theory?subject_id=${encodeURIComponent(subjectId)}`, { token }),
 
   // --- tutor chat ---
   tutorChat: (token: string, data: { subject_id: string; message: string; history: TutorChatMessage[] }) =>
