@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import QuestionCard from "@/components/QuestionCard";
 import StreakBadge from "@/components/StreakBadge";
-import XPBar, { levelForXp } from "@/components/XPBar";
+import XPBar from "@/components/XPBar";
+import { revealAnswer, submitAnswer, useQuizProgress } from "@/lib/useQuizProgress";
 import type { AttemptResult, QuestionOut } from "@/lib/api";
 
 export default function QuizRunner({
@@ -22,9 +23,7 @@ export default function QuizRunner({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [questionNumber, setQuestionNumber] = useState(0);
-  const [xpTotal, setXpTotal] = useState(initialXpTotal);
-  const [streakDays, setStreakDays] = useState(initialStreakDays);
-  const [celebrating, setCelebrating] = useState(false);
+  const { xpTotal, streakDays, celebrating, applyResult } = useQuizProgress(initialXpTotal, initialStreakDays);
 
   async function loadNext() {
     setLoading(true);
@@ -47,29 +46,15 @@ export default function QuizRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topicId]);
 
-  async function handleSubmit(answer: string): Promise<AttemptResult> {
-    const res = await fetch("/api/quiz/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ student_id: studentId, question_id: question!.id, submitted_answer: answer }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Submit failed.");
-
-    const result = data as AttemptResult;
-    const leveledUp = levelForXp(result.xp_total) > levelForXp(xpTotal);
-    setXpTotal(result.xp_total);
-    setStreakDays(result.streak_days);
-    if (leveledUp) {
-      setCelebrating(true);
-      setTimeout(() => setCelebrating(false), 900);
-    }
+  async function handleSubmit(answer: string, selfReportedCorrect?: boolean): Promise<AttemptResult> {
+    const result = await submitAnswer(studentId, question!.id, answer, selfReportedCorrect);
+    applyResult(result);
     return result;
   }
 
   return (
     <div>
-      <div className="mb-6 flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-purple-100">
+      <div className="mb-6 flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-sky-100">
         <div className="flex-1">
           <XPBar xpTotal={xpTotal} celebrate={celebrating} />
         </div>
@@ -77,7 +62,7 @@ export default function QuizRunner({
       </div>
 
       {loading && !question && (
-        <p className="flex items-center justify-center gap-2 text-center text-purple-400">
+        <p className="flex items-center justify-center gap-2 text-center text-sky-400">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading question...
         </p>
@@ -85,8 +70,14 @@ export default function QuizRunner({
       {error && <p className="text-center text-rose-500">{error}</p>}
       {question && (
         <>
-          <p className="mb-3 text-center text-sm font-medium text-purple-400">Question {questionNumber}</p>
-          <QuestionCard question={question} onSubmit={handleSubmit} onNext={loadNext} />
+          <p className="mb-3 text-center text-sm font-medium text-sky-400">Question {questionNumber}</p>
+          <QuestionCard
+            key={question.id}
+            question={question}
+            onSubmit={handleSubmit}
+            onReveal={() => revealAnswer(question.id)}
+            onNext={loadNext}
+          />
         </>
       )}
     </div>

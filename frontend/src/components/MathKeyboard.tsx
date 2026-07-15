@@ -63,6 +63,8 @@ const TRIG_TOKENS: MathToken[] = [
   { label: "sin⁻¹(x)", insert: "sin⁻¹()", cursorOffset: 6 },
   { label: "cos⁻¹(x)", insert: "cos⁻¹()", cursorOffset: 6 },
   { label: "tan⁻¹(x)", insert: "tan⁻¹()", cursorOffset: 6 },
+  { label: "α", insert: "α" },
+  { label: "β", insert: "β" },
   { label: "θ", insert: "θ" },
   { label: "φ", insert: "φ" },
   { label: "°", insert: "°" },
@@ -72,8 +74,15 @@ const TRIG_TOKENS: MathToken[] = [
   { label: "∞", insert: "∞" },
 ];
 
-export default function MathKeyboard({ onInsert }: { onInsert: (token: MathToken) => void }) {
-  const [open, setOpen] = useState(false);
+export default function MathKeyboard({
+  open,
+  onOpenChange,
+  onInsert,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onInsert: (token: MathToken) => void;
+}) {
   const [tab, setTab] = useState<"basic" | "trig">("basic");
 
   const tokens = tab === "basic" ? BASIC_TOKENS : TRIG_TOKENS;
@@ -82,8 +91,8 @@ export default function MathKeyboard({ onInsert }: { onInsert: (token: MathToken
     <div className="mt-2">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-sm font-semibold text-purple-500 hover:text-purple-700"
+        onClick={() => onOpenChange(!open)}
+        className="flex items-center gap-1.5 text-sm font-semibold text-sky-500 hover:text-sky-700"
       >
         <Calculator className="h-4 w-4" />
         Math symbols
@@ -91,19 +100,19 @@ export default function MathKeyboard({ onInsert }: { onInsert: (token: MathToken
       </button>
 
       {open && (
-        <div className="mt-2 rounded-xl border-2 border-purple-100 bg-purple-50/60 p-3">
-          <div className="mb-2 flex gap-4 border-b border-purple-200 text-sm font-bold">
+        <div className="mt-2 rounded-xl border-2 border-sky-100 bg-sky-50/60 p-3">
+          <div className="mb-2 flex gap-4 border-b border-sky-200 text-sm font-bold">
             <button
               type="button"
               onClick={() => setTab("basic")}
-              className={`pb-1.5 ${tab === "basic" ? "border-b-2 border-purple-600 text-purple-700" : "text-zinc-400"}`}
+              className={`pb-1.5 ${tab === "basic" ? "border-b-2 border-sky-600 text-sky-700" : "text-zinc-400"}`}
             >
               BASIC
             </button>
             <button
               type="button"
               onClick={() => setTab("trig")}
-              className={`pb-1.5 ${tab === "trig" ? "border-b-2 border-purple-600 text-purple-700" : "text-zinc-400"}`}
+              className={`pb-1.5 ${tab === "trig" ? "border-b-2 border-sky-600 text-sky-700" : "text-zinc-400"}`}
             >
               TRIG
             </button>
@@ -114,7 +123,7 @@ export default function MathKeyboard({ onInsert }: { onInsert: (token: MathToken
                 key={token.label}
                 type="button"
                 onClick={() => onInsert(token)}
-                className={`rounded-lg bg-white py-2 text-sm font-medium text-zinc-700 shadow-sm ring-1 ring-purple-100 hover:bg-purple-100 ${
+                className={`rounded-lg bg-white py-2 text-sm font-medium text-zinc-700 shadow-sm ring-1 ring-sky-100 hover:bg-sky-100 ${
                   token.wide ? "col-span-3" : ""
                 }`}
               >

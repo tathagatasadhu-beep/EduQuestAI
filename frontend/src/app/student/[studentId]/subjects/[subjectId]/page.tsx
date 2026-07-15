@@ -34,7 +34,7 @@ export default async function SubjectPage({
     <div className="mx-auto max-w-2xl px-6 py-10">
       <Link
         href={`/student/${studentId}/subjects`}
-        className="mb-4 inline-flex items-center gap-1 text-sm font-medium text-purple-500 hover:text-purple-700"
+        className="mb-4 inline-flex items-center gap-1 text-sm font-medium text-sky-500 hover:text-sky-700"
       >
         <ArrowLeft className="h-4 w-4" />
         My Subjects
@@ -48,7 +48,7 @@ export default async function SubjectPage({
       </section>
 
       <section>
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-purple-400 uppercase">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-sky-400 uppercase">
           <Dumbbell className="h-4 w-4" strokeWidth={2.2} />
           Practice
         </h2>

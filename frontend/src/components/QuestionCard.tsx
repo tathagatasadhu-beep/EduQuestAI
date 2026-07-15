@@ -1,26 +1,35 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { BookmarkPlus, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { BookmarkPlus, CheckCircle2, Loader2, MessageCircleQuestion, XCircle } from "lucide-react";
 import type { AttemptResult, QuestionOut } from "@/lib/api";
 import MathKeyboard, { type MathToken } from "@/components/MathKeyboard";
+import TutorChat from "@/components/TutorChat";
 
 export default function QuestionCard({
   question,
   onSubmit,
+  onReveal,
   onNext,
 }: {
   question: QuestionOut;
-  onSubmit: (answer: string) => Promise<AttemptResult>;
+  onSubmit: (answer: string, selfReportedCorrect?: boolean) => Promise<AttemptResult>;
+  // Free-response only — looks up the correct answer without grading, so the
+  // student can self-report whether they got it right (see below for why).
+  onReveal: () => Promise<string>;
   onNext: () => void;
 }) {
   const [answer, setAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+  const [revealedAnswer, setRevealedAnswer] = useState<string | null>(null);
   const [result, setResult] = useState<AttemptResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isMultipleChoice = question.question_type === "multiple_choice";
+  const isFreeResponse = question.question_type === "free_response";
   const answered = result !== null;
 
   function handleInsert(token: MathToken) {
@@ -44,12 +53,12 @@ export default function QuestionCard({
     setAnswer(next);
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(selfReportedCorrect?: boolean) {
     if (!answer || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await onSubmit(answer);
+      const res = await onSubmit(answer, selfReportedCorrect);
       setResult(res);
     } catch {
       setError("Couldn't submit that answer — try again.");
@@ -58,15 +67,31 @@ export default function QuestionCard({
     }
   }
 
+  async function handleReveal() {
+    if (!answer || revealing) return;
+    setRevealing(true);
+    setError(null);
+    try {
+      const correctAnswer = await onReveal();
+      setRevealedAnswer(correctAnswer);
+    } catch {
+      setError("Couldn't reveal the answer — try again.");
+    } finally {
+      setRevealing(false);
+    }
+  }
+
   function handleNext() {
     setAnswer("");
     setResult(null);
     setError(null);
+    setRevealedAnswer(null);
+    setKeyboardOpen(false);
     onNext();
   }
 
   return (
-    <div className="relative rounded-3xl bg-white p-6 shadow-lg ring-1 ring-purple-100">
+    <div className="relative rounded-3xl bg-white p-6 shadow-lg ring-1 ring-sky-100">
       {answered && result.xp_awarded > 0 && (
         <span className="animate-float-up pointer-events-none absolute top-2 right-6 text-lg font-extrabold text-amber-500">
           +{result.xp_awarded} XP
@@ -90,13 +115,13 @@ export default function QuestionCard({
                 className={`flex items-center justify-between rounded-xl border-2 px-4 py-3 text-left font-medium transition
                   ${isCorrectOption ? "border-emerald-400 bg-emerald-50" : ""}
                   ${isWrongSelection ? "border-rose-300 bg-rose-50" : ""}
-                  ${!answered && selected ? "border-purple-500 bg-purple-50" : ""}
-                  ${!answered && !selected ? "border-zinc-200 hover:border-purple-300" : ""}
+                  ${!answered && selected ? "border-sky-500 bg-sky-50" : ""}
+                  ${!answered && !selected ? "border-zinc-200 hover:border-sky-300" : ""}
                   ${answered && !isCorrectOption && !isWrongSelection ? "border-zinc-100 opacity-60" : ""}
                   ${answered ? "cursor-not-allowed" : "cursor-pointer"}`}
               >
                 <span>
-                  <span className="mr-2 text-purple-500">{opt.option_label}</span>
+                  <span className="mr-2 text-sky-500">{opt.option_label}</span>
                   {opt.option_text}
                 </span>
                 {isCorrectOption && <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" strokeWidth={2.5} />}
@@ -110,26 +135,60 @@ export default function QuestionCard({
           <input
             ref={inputRef}
             type="text"
-            disabled={answered}
+            disabled={answered || revealedAnswer !== null}
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
+            onFocus={() => setKeyboardOpen(true)}
             placeholder="Type your answer..."
-            className="w-full rounded-xl border-2 border-zinc-200 px-4 py-3 font-medium focus:border-purple-400 focus:outline-none disabled:opacity-70"
+            className="w-full rounded-xl border-2 border-zinc-200 px-4 py-3 font-medium focus:border-sky-400 focus:outline-none disabled:opacity-70"
           />
-          {!answered && <MathKeyboard onInsert={handleInsert} />}
+          {!answered && revealedAnswer === null && (
+            <MathKeyboard open={keyboardOpen} onOpenChange={setKeyboardOpen} onInsert={handleInsert} />
+          )}
         </>
       )}
 
       {error && <p className="mt-3 text-sm text-rose-500">{error}</p>}
 
-      {!answered ? (
+      {!answered && revealedAnswer !== null ? (
+        <div className="mt-5 rounded-xl bg-sky-50 px-4 py-3">
+          <p className="mb-3 text-sm text-zinc-700">
+            The correct answer was: <span className="font-bold text-zinc-900">{revealedAnswer}</span>
+          </p>
+          <p className="mb-2 text-sm font-semibold text-zinc-700">Did you get it right?</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleSubmit(true)}
+              disabled={submitting}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 py-2.5 font-bold text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" strokeWidth={2.5} />}
+              Yes, I got it
+            </button>
+            <button
+              onClick={() => handleSubmit(false)}
+              disabled={submitting}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-500 py-2.5 font-bold text-white transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" strokeWidth={2.5} />}
+              No, I missed it
+            </button>
+          </div>
+        </div>
+      ) : !answered ? (
         <button
-          onClick={handleSubmit}
-          disabled={!answer || submitting}
-          className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 py-3 font-bold text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => (isFreeResponse ? handleReveal() : handleSubmit())}
+          disabled={!answer || submitting || revealing}
+          className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-sky-600 py-3 font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-          {submitting ? "Checking..." : "Submit Answer"}
+          {(submitting || revealing) && <Loader2 className="h-4 w-4 animate-spin" />}
+          {isFreeResponse
+            ? revealing
+              ? "Checking..."
+              : "Show Answer"
+            : submitting
+              ? "Checking..."
+              : "Submit Answer"}
         </button>
       ) : (
         <div className="mt-5">
@@ -153,6 +212,21 @@ export default function QuestionCard({
               )}
             </span>
           </div>
+
+          {!result.is_correct && (
+            <div className="mt-4">
+              <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-zinc-700">
+                <MessageCircleQuestion className="h-4 w-4 text-sky-500" strokeWidth={2.2} />
+                Ask the AI tutor why
+              </p>
+              <TutorChat
+                subjectId={question.subject_id}
+                subjectName={question.subject_name}
+                initialPrompt={`Why is the answer to "${question.prompt_text}" "${result.correct_answer}"?`}
+              />
+            </div>
+          )}
+
           <button
             onClick={handleNext}
             className="mt-3 w-full rounded-xl bg-zinc-800 py-3 font-bold text-white transition hover:bg-zinc-900"

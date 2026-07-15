@@ -20,7 +20,7 @@ export default async function BadgesPage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-10">
       <h1 className="mb-1 flex items-center gap-2 text-2xl font-bold text-zinc-800">
-        <Award className="h-6 w-6 text-purple-500" strokeWidth={2.2} />
+        <Award className="h-6 w-6 text-sky-500" strokeWidth={2.2} />
         Badges
       </h1>
       <p className="mb-6 text-sm text-zinc-500">

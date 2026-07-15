@@ -7,10 +7,22 @@ twice — before (2) a fresh question in the topic they haven't attempted, and
 only once both are exhausted, (3) the question they practiced longest ago in
 that topic, so the quiz never dead-ends even after full topic mastery.
 
+questions: for a given topic (+ optional attempt-history filter), returns the
+*whole* matching active-question set up front — powers the fixed-list
+practice session (sidebar of question pills), as opposed to next-question's
+one-at-a-time adaptive serving.
+
+reveal: looks up the correct answer for a free-response question without
+grading or recording an attempt, so the frontend can show it before the
+student self-reports whether they got it right (see submit below).
+
 submit: scores the answer, records the attempt (attempt_number derived from
 prior attempts for this student+question), and updates the review queue —
 resetting/inserting on a miss, incrementing (and resolving at 2 in a row) on
-a correct retry.
+a correct retry. For free-response questions, `is_correct` comes from the
+student's own self-report (paired with reveal above) rather than an exact
+string match, since answers like proofs have no single canonical string —
+multiple_choice is unaffected and still auto-graded.
 """
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
@@ -19,9 +31,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.orm import AnswerKey, Attempt, Question, ReviewQueue, Student
+from app.db.orm import AnswerKey, Attempt, Question, ReviewQueue, Student, Subject, Topic
 from app.db.session import get_db
-from app.models.schemas import AttemptResult, AttemptSubmit, QuestionOut
+from app.models.schemas import AttemptResult, AttemptSubmit, QuestionOut, RevealOut
 from app.routers.auth import get_current_student
 
 router = APIRouter()
@@ -32,6 +44,40 @@ REVIEW_COOLDOWN = timedelta(minutes=30)
 
 XP_PER_CORRECT = 10
 XP_REVIEW_RESOLVED_BONUS = 15
+
+QUESTION_FILTERS = {"all", "missed_1st", "missed_2nd"}
+
+
+async def _topic_and_subject(db: AsyncSession, topic_id: UUID) -> tuple[Topic, Subject]:
+    topic = await db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found.")
+    subject = await db.get(Subject, topic.subject_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    return topic, subject
+
+
+def _serialize_question(question: Question, subject: Subject, options: list[AnswerKey]) -> QuestionOut:
+    return QuestionOut(
+        id=question.id,
+        topic_id=question.topic_id,
+        subject_id=subject.id,
+        subject_name=subject.name,
+        prompt_text=question.prompt_text,
+        prompt_latex=question.prompt_latex,
+        image_path=question.image_path,
+        difficulty=question.difficulty,
+        question_type=question.question_type,
+        options=[{"option_label": o.option_label, "option_text": o.option_text} for o in options],
+    )
+
+
+def _correct_answer_text(question_type: str, answer_rows: list[AnswerKey]) -> str:
+    correct_row = next((a for a in answer_rows if a.is_correct), None)
+    if correct_row is None:
+        return ""
+    return correct_row.option_label if question_type == "multiple_choice" and correct_row.option_label else correct_row.option_text
 
 
 def _apply_streak(student: Student, prior_last_attempt_at: datetime | None, today: date) -> None:
@@ -58,6 +104,7 @@ async def next_question(
     student: dict = Depends(get_current_student),
 ):
     student_id = student["student_id"]
+    _, subject = await _topic_and_subject(db, topic_id)
     due_cutoff = datetime.now(timezone.utc) - REVIEW_COOLDOWN
 
     due_review_stmt = (
@@ -105,16 +152,66 @@ async def next_question(
         .all()
     )
 
-    return QuestionOut(
-        id=question.id,
-        topic_id=question.topic_id,
-        prompt_text=question.prompt_text,
-        prompt_latex=question.prompt_latex,
-        image_path=question.image_path,
-        difficulty=question.difficulty,
-        question_type=question.question_type,
-        options=[{"option_label": o.option_label, "option_text": o.option_text} for o in options],
+    return _serialize_question(question, subject, options)
+
+
+@router.get("/questions", response_model=list[QuestionOut])
+async def list_questions(
+    topic_id: UUID,
+    filter: str = "all",
+    db: AsyncSession = Depends(get_db),
+    student: dict = Depends(get_current_student),
+):
+    """Powers the new fixed-list practice session (sidebar of question pills) —
+    unlike next-question, this returns the *whole* matching set up front so the
+    frontend can track progress through a known-size batch."""
+    if filter not in QUESTION_FILTERS:
+        raise HTTPException(status_code=400, detail="filter must be one of: all, missed_1st, missed_2nd.")
+
+    student_id = student["student_id"]
+    _, subject = await _topic_and_subject(db, topic_id)
+
+    stmt = select(Question).where(Question.topic_id == topic_id, Question.is_active.is_(True))
+    if filter == "missed_1st":
+        stmt = stmt.join(Attempt, Attempt.question_id == Question.id).where(
+            Attempt.student_id == student_id, Attempt.attempt_number == 1, Attempt.is_correct.is_(False)
+        )
+    elif filter == "missed_2nd":
+        stmt = stmt.join(Attempt, Attempt.question_id == Question.id).where(
+            Attempt.student_id == student_id, Attempt.attempt_number == 2, Attempt.is_correct.is_(False)
+        )
+    stmt = stmt.order_by(Question.id)
+
+    questions = (await db.execute(stmt)).scalars().all()
+    if not questions:
+        return []
+
+    option_rows = (
+        await db.execute(select(AnswerKey).where(AnswerKey.question_id.in_([q.id for q in questions])))
+    ).scalars().all()
+    options_by_question: dict[UUID, list[AnswerKey]] = {}
+    for o in option_rows:
+        options_by_question.setdefault(o.question_id, []).append(o)
+
+    return [_serialize_question(q, subject, options_by_question.get(q.id, [])) for q in questions]
+
+
+@router.get("/reveal", response_model=RevealOut)
+async def reveal_answer(
+    question_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    student: dict = Depends(get_current_student),
+):
+    """Shows the correct answer for a free-response question without grading
+    or recording an attempt — the student self-reports correctness afterward
+    via `submit`'s `self_reported_correct` (see its docstring for why)."""
+    question = await db.get(Question, question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail="Question not found.")
+    answer_rows = (
+        (await db.execute(select(AnswerKey).where(AnswerKey.question_id == question_id))).scalars().all()
     )
+    return RevealOut(correct_answer=_correct_answer_text(question.question_type, answer_rows))
 
 
 def _matches(question_type: str, submitted: str, correct: AnswerKey) -> bool:
@@ -147,12 +244,11 @@ async def submit_answer(
         .all()
     )
     correct_row = next((a for a in answer_rows if a.is_correct), None)
-    is_correct = correct_row is not None and _matches(question.question_type, payload.submitted_answer, correct_row)
-    correct_answer = (
-        (correct_row.option_label if question.question_type == "multiple_choice" and correct_row.option_label else correct_row.option_text)
-        if correct_row is not None
-        else ""
-    )
+    if question.question_type == "free_response" and payload.self_reported_correct is not None:
+        is_correct = payload.self_reported_correct
+    else:
+        is_correct = correct_row is not None and _matches(question.question_type, payload.submitted_answer, correct_row)
+    correct_answer = _correct_answer_text(question.question_type, answer_rows)
 
     prior_attempts = (
         await db.execute(

@@ -33,16 +33,16 @@ export default function HelpPage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-10">
       <h1 className="mb-1 flex items-center gap-2 text-2xl font-bold text-zinc-800">
-        <HelpCircle className="h-6 w-6 text-purple-500" strokeWidth={2.2} />
+        <HelpCircle className="h-6 w-6 text-sky-500" strokeWidth={2.2} />
         Help
       </h1>
       <p className="mb-6 text-sm text-zinc-500">Not sure how something works? Here&apos;s a quick guide.</p>
 
       <div className="flex flex-col gap-3">
         {FAQS.map(({ icon: Icon, question, answer }) => (
-          <div key={question} className="rounded-2xl border-2 border-purple-100 bg-white p-4 shadow-sm">
+          <div key={question} className="rounded-2xl border-2 border-sky-100 bg-white p-4 shadow-sm">
             <div className="mb-1.5 flex items-center gap-2">
-              <Icon className="h-4 w-4 text-purple-500" strokeWidth={2.2} />
+              <Icon className="h-4 w-4 text-sky-500" strokeWidth={2.2} />
               <p className="font-semibold text-zinc-800">{question}</p>
             </div>
             <p className="text-sm text-zinc-500">{answer}</p>

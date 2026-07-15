@@ -44,7 +44,7 @@ export default function ProgressTrail({
 }) {
   if (topics.length === 0) {
     return (
-      <p className="text-sm text-purple-400 italic">
+      <p className="text-sm text-sky-400 italic">
         No topics yet — ask a parent to upload a worksheet to start your quest!
       </p>
     );
@@ -71,7 +71,7 @@ export default function ProgressTrail({
                   {style.label}
                 </span>
               </span>
-              <ChevronRight className="h-5 w-5 text-purple-400" strokeWidth={2.2} />
+              <ChevronRight className="h-5 w-5 text-sky-400" strokeWidth={2.2} />
             </Link>
           </li>
         );

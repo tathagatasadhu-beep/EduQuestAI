@@ -12,10 +12,10 @@ export default async function StudentLayout({
   const { studentId } = await params;
 
   return (
-    <div className="flex min-h-full flex-1 flex-col bg-gradient-to-b from-purple-50 via-teal-50/40 to-white">
-      <header className="border-b border-purple-100/70 bg-white/70 backdrop-blur">
+    <div className="flex min-h-full flex-1 flex-col bg-gradient-to-b from-sky-50 via-sky-50/40 to-white">
+      <header className="border-b border-sky-100/70 bg-white/70 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-2 text-purple-600">
+          <div className="flex items-center gap-2 text-sky-600">
             <Sparkles className="h-4 w-4" strokeWidth={2.2} />
             <span className="text-sm font-bold">EduQuestAI</span>
           </div>

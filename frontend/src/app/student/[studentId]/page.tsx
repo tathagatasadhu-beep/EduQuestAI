@@ -51,7 +51,7 @@ export default async function StudentHomePage({
         </h1>
       </div>
 
-      <div className="mb-6 flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-purple-100">
+      <div className="mb-6 flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-sky-100">
         <div className="flex-1">
           <XPBar xpTotal={me.xp_total} />
         </div>
@@ -61,46 +61,46 @@ export default async function StudentHomePage({
       {weakest && weakestSubject ? (
         <Link
           href={`/student/${me.id}/subjects/${weakestSubject.id}`}
-          className="mb-6 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-purple-500 to-teal-500 p-5 text-white shadow-sm transition hover:shadow-md"
+          className="mb-6 flex items-center gap-3 rounded-2xl bg-sky-600 p-5 text-white shadow-sm transition hover:shadow-md"
         >
           <Sparkles className="h-6 w-6 shrink-0" strokeWidth={2} />
           <div className="flex-1">
             <p className="font-semibold">Let&apos;s work on {weakest.topic_name} today!</p>
-            <p className="text-sm text-purple-100">Jump back in with a quick review and some practice.</p>
+            <p className="text-sm text-sky-100">Jump back in with a quick review and some practice.</p>
           </div>
           <ChevronRight className="h-5 w-5 shrink-0" strokeWidth={2.2} />
         </Link>
       ) : assignedSubjects.length > 0 ? (
         <Link
           href={`/student/${me.id}/subjects`}
-          className="mb-6 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-purple-500 to-teal-500 p-5 text-white shadow-sm transition hover:shadow-md"
+          className="mb-6 flex items-center gap-3 rounded-2xl bg-sky-600 p-5 text-white shadow-sm transition hover:shadow-md"
         >
           <Compass className="h-6 w-6 shrink-0" strokeWidth={2} />
           <div className="flex-1">
             <p className="font-semibold">Ready to start your first quest?</p>
-            <p className="text-sm text-purple-100">See what your subjects have in store.</p>
+            <p className="text-sm text-sky-100">See what your subjects have in store.</p>
           </div>
           <ChevronRight className="h-5 w-5 shrink-0" strokeWidth={2.2} />
         </Link>
       ) : (
-        <div className="mb-6 flex flex-col items-center gap-3 rounded-2xl bg-white/60 px-6 py-10 text-center ring-1 ring-purple-100">
-          <Compass className="h-8 w-8 text-purple-300" strokeWidth={1.75} />
+        <div className="mb-6 flex flex-col items-center gap-3 rounded-2xl bg-white/60 px-6 py-10 text-center ring-1 ring-sky-100">
+          <Compass className="h-8 w-8 text-sky-300" strokeWidth={1.75} />
           <p className="text-zinc-400">No quests yet — ask a parent to assign a subject!</p>
         </div>
       )}
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-wide text-purple-400 uppercase">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-wide text-sky-400 uppercase">
             <Award className="h-4 w-4" strokeWidth={2.2} />
             Badges
           </h2>
-          <Link href={`/student/${me.id}/badges`} className="text-xs font-medium text-purple-500 hover:text-purple-700">
+          <Link href={`/student/${me.id}/badges`} className="text-xs font-medium text-sky-500 hover:text-sky-700">
             See all →
           </Link>
         </div>
         {earnedBadges.length === 0 ? (
-          <p className="text-sm text-purple-400 italic">No badges yet — start practicing to earn your first one!</p>
+          <p className="text-sm text-sky-400 italic">No badges yet — start practicing to earn your first one!</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {earnedBadges.map((b) => (

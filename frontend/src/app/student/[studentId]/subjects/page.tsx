@@ -24,14 +24,14 @@ export default async function MySubjectsPage({
   return (
     <div className="mx-auto max-w-2xl px-6 py-10">
       <h1 className="mb-1 flex items-center gap-2 text-2xl font-bold text-zinc-800">
-        <BookOpen className="h-6 w-6 text-purple-500" strokeWidth={2.2} />
+        <BookOpen className="h-6 w-6 text-sky-500" strokeWidth={2.2} />
         My Subjects
       </h1>
       <p className="mb-6 text-sm text-zinc-500">Pick a subject to get help understanding it, then practice.</p>
 
       {subjects.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-2xl bg-white/60 px-6 py-12 text-center ring-1 ring-purple-100">
-          <Compass className="h-8 w-8 text-purple-300" strokeWidth={1.75} />
+        <div className="flex flex-col items-center gap-3 rounded-2xl bg-white/60 px-6 py-12 text-center ring-1 ring-sky-100">
+          <Compass className="h-8 w-8 text-sky-300" strokeWidth={1.75} />
           <p className="text-zinc-400">No subjects assigned yet — ask a parent to assign one!</p>
         </div>
       ) : (
@@ -40,9 +40,9 @@ export default async function MySubjectsPage({
             <li key={s.id}>
               <Link
                 href={`/student/${studentId}/subjects/${s.id}`}
-                className="flex items-center gap-4 rounded-2xl border-2 border-purple-100 bg-white px-4 py-4 shadow-sm transition hover:scale-[1.01] hover:border-purple-200 hover:shadow-md"
+                className="flex items-center gap-4 rounded-2xl border-2 border-sky-100 bg-white px-4 py-4 shadow-sm transition hover:scale-[1.01] hover:border-sky-200 hover:shadow-md"
               >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-600">
                   <BookOpen className="h-5 w-5" strokeWidth={2} />
                 </span>
                 <span className="flex-1">
@@ -52,7 +52,7 @@ export default async function MySubjectsPage({
                     {s.topics.length} topic{s.topics.length === 1 ? "" : "s"}
                   </span>
                 </span>
-                <ChevronRight className="h-5 w-5 text-purple-400" strokeWidth={2.2} />
+                <ChevronRight className="h-5 w-5 text-sky-400" strokeWidth={2.2} />
               </Link>
             </li>
           ))}

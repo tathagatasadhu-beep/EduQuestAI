@@ -86,6 +86,8 @@ export type QuestionOption = { option_label: string | null; option_text: string 
 export type QuestionOut = {
   id: string;
   topic_id: string;
+  subject_id: string;
+  subject_name: string;
   prompt_text: string;
   prompt_latex: string | null;
   image_path: string | null;
@@ -93,6 +95,8 @@ export type QuestionOut = {
   question_type: "multiple_choice" | "free_response";
   options: QuestionOption[];
 };
+
+export type QuestionFilter = "all" | "missed_1st" | "missed_2nd";
 
 export type AttemptResult = {
   is_correct: boolean;
@@ -240,9 +244,21 @@ export const api = {
   // --- quiz ---
   nextQuestion: (token: string, topicId: string) =>
     request<QuestionOut>(`/api/quiz/next-question?topic_id=${encodeURIComponent(topicId)}`, { token }),
+  listQuestions: (token: string, topicId: string, filter: QuestionFilter) =>
+    request<QuestionOut[]>(
+      `/api/quiz/questions?topic_id=${encodeURIComponent(topicId)}&filter=${filter}`,
+      { token }
+    ),
+  revealAnswer: (token: string, questionId: string) =>
+    request<{ correct_answer: string }>(`/api/quiz/reveal?question_id=${encodeURIComponent(questionId)}`, { token }),
   submitAnswer: (
     token: string,
-    data: { student_id: string; question_id: string; submitted_answer: string }
+    data: {
+      student_id: string;
+      question_id: string;
+      submitted_answer: string;
+      self_reported_correct?: boolean;
+    }
   ) =>
     request<AttemptResult>("/api/quiz/submit", {
       method: "POST",

@@ -12,8 +12,13 @@
   --font-mono: var(--font-geist-mono);
 
   /* Parent-side palette: dark navy hero + electric-blue accent + soft
-     pastel content sections. Deliberately scoped to the parent/marketing
-     surfaces — the student side keeps its warm purple/pink game tone. */
+     pastel content sections. The student side used to keep a separate warm
+     purple/teal game tone, but as of 2026-07-14 it was moved to a plain
+     sky-blue accent (Tailwind's built-in `sky-*` scale) to match an RSM/
+     Khan-Academy-style academic reference the user provided — see
+     CLAUDE.md's student-side notes. Status/semantic colors (emerald =
+     correct/mastered, rose = incorrect/needs work, amber = badges) are
+     unchanged either way. */
   --color-navy-950: #0a0e1f;
   --color-navy-900: #0d1330;
   --color-navy-800: #131a3d;

@@ -111,6 +111,8 @@ class TopicUpdate(BaseModel):
 class QuestionOut(BaseModel):
     id: UUID
     topic_id: UUID
+    subject_id: UUID
+    subject_name: str
     prompt_text: str
     prompt_latex: Optional[str] = None
     image_path: Optional[str] = None
@@ -119,10 +121,19 @@ class QuestionOut(BaseModel):
     options: list[dict] = []  # [{option_label, option_text}] — is_correct withheld client-side
 
 
+class RevealOut(BaseModel):
+    correct_answer: str
+
+
 class AttemptSubmit(BaseModel):
     student_id: UUID
     question_id: UUID
     submitted_answer: str
+    # Free-response only — see quiz.py::submit_answer. When set, this becomes
+    # `is_correct` directly instead of the exact-string match in `_matches`,
+    # since free-response answers (e.g. proofs) often have no single correct
+    # string. Ignored for multiple_choice, which stays auto-graded.
+    self_reported_correct: Optional[bool] = None
 
 
 class AttemptResult(BaseModel):
