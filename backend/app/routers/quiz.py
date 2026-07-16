@@ -83,6 +83,7 @@ async def _serialize_question(question: Question, subject: Subject, options: lis
         difficulty=question.difficulty,
         question_type=question.question_type,
         options=[{"option_label": o.option_label, "option_text": o.option_text} for o in options],
+        requires_self_assessment=question.requires_self_assessment,
     )
 
 

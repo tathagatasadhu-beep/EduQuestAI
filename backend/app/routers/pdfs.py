@@ -415,6 +415,7 @@ async def _process_pdf(
                     difficulty=eq.difficulty_guess,
                     question_type="multiple_choice" if len(eq.options) > 1 else "free_response",
                     image_path=image_path,
+                    requires_self_assessment=eq.requires_self_assessment,
                 )
                 db.add(question)
                 await db.flush()

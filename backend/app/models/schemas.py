@@ -119,6 +119,10 @@ class QuestionOut(BaseModel):
     difficulty: Optional[Literal["easy", "medium", "hard"]] = None
     question_type: Literal["multiple_choice", "free_response"]
     options: list[dict] = []  # [{option_label, option_text}] — is_correct withheld client-side
+    # True only for proof/open-ended free-response questions with no single
+    # checkable answer — gates the reveal+self-report flow vs. plain
+    # auto-grading on the frontend. Always False for multiple_choice.
+    requires_self_assessment: bool = False
 
 
 class RevealOut(BaseModel):

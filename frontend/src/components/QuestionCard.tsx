@@ -29,7 +29,10 @@ export default function QuestionCard({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isMultipleChoice = question.question_type === "multiple_choice";
-  const isFreeResponse = question.question_type === "free_response";
+  // Only proof/open-ended free-response questions (no single checkable
+  // answer) use the reveal + self-report flow — everything else, including
+  // most free-response questions, auto-grades on submit like multiple_choice.
+  const usesSelfAssessment = question.question_type === "free_response" && question.requires_self_assessment;
   const answered = result !== null;
 
   function handleInsert(token: MathToken) {
@@ -186,12 +189,12 @@ export default function QuestionCard({
         </div>
       ) : !answered ? (
         <button
-          onClick={() => (isFreeResponse ? handleReveal() : handleSubmit())}
+          onClick={() => (usesSelfAssessment ? handleReveal() : handleSubmit())}
           disabled={!answer || submitting || revealing}
           className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-sky-600 py-3 font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {(submitting || revealing) && <Loader2 className="h-4 w-4 animate-spin" />}
-          {isFreeResponse
+          {usesSelfAssessment
             ? revealing
               ? "Checking..."
               : "Show Answer"

@@ -118,6 +118,7 @@ class Question(Base):
     difficulty: Mapped[str | None] = mapped_column(String, nullable=True)
     question_type: Mapped[str] = mapped_column(String, default="multiple_choice")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    requires_self_assessment: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class AnswerKey(Base):

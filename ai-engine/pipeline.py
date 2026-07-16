@@ -54,6 +54,11 @@ class ExtractedQuestion:
     topic_guess: str
     difficulty_guess: str  # "easy" | "medium" | "hard"
     image_url: str | None = None  # a key into ExtractionResult.images, if this question has a diagram
+    # True only for proofs/derivations/open-ended questions with no single
+    # checkable answer — always False for multiple_choice, which is always
+    # unambiguous. Gates the student-facing self-assessment (reveal + self-
+    # report) flow vs. plain auto-grading.
+    requires_self_assessment: bool = False
 
 
 @dataclass
@@ -147,6 +152,13 @@ one immediately preceding or embedded within it — and copy that URL verbatim i
 that question. Use null when a question has no associated diagram. Only ever use a URL that literally
 appears in the input; never invent one.
 
+For each free-response question (never for multiple-choice, which is always unambiguous), decide
+whether it has one single, definite, checkable answer — a number, an expression, a word, a short
+phrase — or whether it's open-ended with no single correct string (a proof, a derivation, an
+explanation, "show that...", "prove that...", "explain why..."). Set "requires_self_assessment" to
+true only for the open-ended case; false for everything else, including most free-response questions
+(e.g. "Solve for x: 2x+3=11" is false — it has one definite answer, "4").
+
 Respond with a JSON object of exactly this shape, no prose, no markdown fences:
 {
   "subject_guess": "short subject/course name for the whole worksheet",
@@ -160,7 +172,8 @@ Respond with a JSON object of exactly this shape, no prose, no markdown fences:
       ],
       "topic_guess": "short topic name, e.g. 'Related Rates'",
       "difficulty_guess": "easy" | "medium" | "hard",
-      "image_url": "the cdn.mathpix.com URL for this question's diagram, verbatim, or null"
+      "image_url": "the cdn.mathpix.com URL for this question's diagram, verbatim, or null",
+      "requires_self_assessment": true | false
     }
   ]
 }
@@ -177,6 +190,7 @@ def _parse_question(item: dict) -> ExtractedQuestion:
         topic_guess=item.get("topic_guess") or "General",
         difficulty_guess=item.get("difficulty_guess") or "medium",
         image_url=item.get("image_url"),
+        requires_self_assessment=bool(item.get("requires_self_assessment")),
     )
 
 

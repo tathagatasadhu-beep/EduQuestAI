@@ -94,6 +94,7 @@ export type QuestionOut = {
   difficulty: "easy" | "medium" | "hard" | null;
   question_type: "multiple_choice" | "free_response";
   options: QuestionOption[];
+  requires_self_assessment: boolean;
 };
 
 export type QuestionFilter = "all" | "missed_1st" | "missed_2nd";
