@@ -81,6 +81,17 @@ assuming anything is a stub.
   same pattern as `level` (`XPBar.tsx::levelForXp`), so there's no backfill problem or second source of truth.
   Required upgrading `openai` from `1.51.0` to `2.45.0` (the pinned version predated the Responses API
   entirely — `client.responses` didn't exist).
+- **Question diagrams + graded self-assessment** (2026-07-16) — `ai-engine/pipeline.py` now detects
+  diagram/figure images Mathpix crops out of a worksheet (they show up inline in the OCR markdown as
+  `![]()` or `\includegraphics{}` references to temporary `cdn.mathpix.com` URLs), downloads them
+  immediately, and asks the extraction LLM to match each to its question. Matched images are re-uploaded
+  to a private `question-images` Supabase Storage bucket; `quiz.py` signs a fresh URL for `Question.image_path`
+  whenever a question is served, and `QuestionCard.tsx` renders it. Same extraction call now also sets
+  `Question.requires_self_assessment` (`true` only for proofs/derivations/open-ended answers) — only those
+  questions get the reveal-answer-and-self-report flow in `QuestionCard.tsx`; everything else (including
+  most free-response questions) auto-grades via exact string match like before. Both are forward-only —
+  worksheets uploaded before this change don't have diagrams or the self-assessment flag, and need
+  re-uploading to pick them up.
 
 ### What's still missing (confirmed via a full feature audit against the user's spec, 2026-07-08; re-checked 2026-07-13)
 
@@ -88,10 +99,10 @@ assuming anything is a stub.
 - **Parent approval workflow** — the spec's PDF workflow has a "Parent Review" gate before topics/questions
   become usable; ours publishes immediately after extraction. No approve/reject UI exists (library management
   added delete/reorder/content-type tagging, but not a pre-publish approval gate).
-- **Question object gaps** — `page_number` doesn't exist as a column; `image_path` exists on `Question` but is
-  never populated (the pipeline doesn't crop/save an image, only OCR text/LaTeX); no `subtopic` or `tags`
-  concept exists. `explanation` on `AttemptResult` is intentionally always `None` — matches the spec's own
-  "(future)" marker, not a gap.
+- **Question object gaps** — `page_number` doesn't exist as a column; no `subtopic` or `tags` concept exists.
+  `explanation` on `AttemptResult` is intentionally always `None` — matches the spec's own "(future)" marker,
+  not a gap. `image_path` **is now populated** (added 2026-07-16, see below) — this bullet used to say it
+  never was; that's no longer true for newly-uploaded worksheets.
 - **Gamification extras** — XP, streaks, and 8 computed badges (`students.py::_badges_for_student`) all work;
   no leaderboards exist.
 - **Theory PDFs produce no topics/questions** — confirmed during Phase 2 testing: the extraction pipeline only
@@ -180,7 +191,8 @@ its exact env-var list is now superseded by the "Deployment gotchas" section abo
 the connection pooler requirement or that Vercel only needs `BACKEND_URL`). Follow this file's gotchas section
 over `DEPLOY.md` where they conflict.
 
-All migrations through `004_pdf_topic.sql` (`pdfs.topic_id`, added 2026-07-15) are confirmed applied to the
+All migrations through `005_question_self_assessment.sql` (`questions.requires_self_assessment`, added
+2026-07-16) are confirmed applied to the
 production Supabase project — the app's been live and working since. Migrations were run directly against
 the pooler `DATABASE_URL` in `backend/.env` using Node's `pg` client (pure JS, no native build needed —
 unlike `asyncpg`/`psycopg`, which can't install on this ARM64 Windows dev machine) rather than through the
