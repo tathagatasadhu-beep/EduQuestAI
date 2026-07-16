@@ -284,7 +284,7 @@ export const api = {
   pdfStatus: (token: string, pdfId: string) =>
     request<PdfUploadOut>(`/api/pdfs/${pdfId}/status`, { token }),
   listPdfs: (token: string) => request<PdfOut[]>("/api/pdfs", { token }),
-  updatePdf: (token: string, pdfId: string, data: { content_type: "theory" | "practice" }) =>
+  updatePdf: (token: string, pdfId: string, data: { content_type: "theory" | "practice"; topic_id?: string }) =>
     request<PdfOut>(`/api/pdfs/${pdfId}`, {
       method: "PATCH",
       token,

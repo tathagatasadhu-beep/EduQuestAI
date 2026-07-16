@@ -181,6 +181,10 @@ class PdfOut(BaseModel):
 
 class PdfUpdate(BaseModel):
     content_type: Literal["theory", "practice"]
+    # Manually tags this PDF with a topic — the only way to give a theory
+    # PDF a topic at all, since it produces no extracted questions and
+    # therefore no question-derived topic link. Left untouched when omitted.
+    topic_id: Optional[UUID] = None
 
 
 class TheoryPdfOut(BaseModel):

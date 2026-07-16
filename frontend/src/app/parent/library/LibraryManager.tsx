@@ -258,6 +258,21 @@ export default function LibraryManager({
     });
   }
 
+  // The only way a theory PDF (which never gets questions/topics extracted)
+  // ends up under a topic at all — tags the worksheet directly.
+  async function assignPdfTopic(pdf: PdfOut, topicId: string) {
+    setBusyId(pdf.id);
+    await guarded(async () => {
+      const updated = await call<PdfOut>(`/api/pdfs/${pdf.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content_type: pdf.content_type, topic_id: topicId }),
+      });
+      setPdfs((prev) => prev.map((p) => (p.id === pdf.id ? updated : p)));
+    });
+    setBusyId(null);
+  }
+
   function onPdfUploaded(pdf: PdfUploadOut) {
     // The new PDF's subject may still be auto-detecting — this list doesn't
     // poll for status changes itself, so it shows under "Unsorted" here
@@ -559,8 +574,26 @@ export default function LibraryManager({
                               </span>
                             ))}
                           </div>
+                        ) : topics.length > 0 ? (
+                          <select
+                            defaultValue=""
+                            disabled={busyId === row.pdf.id}
+                            onChange={(e) => e.target.value && assignPdfTopic(row.pdf, e.target.value)}
+                            className="rounded-lg border border-dashed border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-500 focus:border-brand-400 focus:outline-none"
+                          >
+                            <option value="" disabled>
+                              Assign a topic...
+                            </option>
+                            {topics.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
                         ) : (
-                          "—"
+                          <span className="text-zinc-400 italic" title="Add a topic to this subject first">
+                            —
+                          </span>
                         )}
                       </td>
                       <td className="px-4 py-3">

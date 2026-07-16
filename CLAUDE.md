@@ -180,13 +180,12 @@ its exact env-var list is now superseded by the "Deployment gotchas" section abo
 the connection pooler requirement or that Vercel only needs `BACKEND_URL`). Follow this file's gotchas section
 over `DEPLOY.md` where they conflict.
 
-**Not yet applied to production** (as of the Phase 1/2 work, 2026-07-12/13) — do these before that code reaches
-Render/Vercel:
-- Run `database/migrations/002_library_management.sql` **and** `003_ai_tutor.sql` against the production
-  Supabase project (Supabase SQL editor, same as `001_init.sql` was — there's no Alembic).
-- Add `FRONTEND_URL` to Render's env vars (the production frontend origin, for the password-reset redirect
-  link).
-- Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to Vercel's env vars (see the
-  password-reset note above for why these are needed despite the "browser never talks to Supabase" rule).
-- Confirm Render picks up the `openai==2.45.0` bump in `backend/requirements.txt` on next deploy (Phase 2's
-  AI tutor needs the Responses API, which `1.51.0` didn't have).
+**Not yet applied to production** (as of the parent-Library-topic work, 2026-07-15) — do this before that
+code reaches Render/Vercel:
+- Run `database/migrations/004_pdf_topic.sql` against the production Supabase project (Supabase SQL editor,
+  same as `001_init.sql`/`002`/`003` were — there's no Alembic). Adds `pdfs.topic_id` (nullable, `on delete
+  set null`) so a PDF — theory worksheets especially, which never get a topic via extracted questions — can
+  be tagged with a topic directly from the Library table.
+
+(Migrations `002_library_management.sql` and `003_ai_tutor.sql` from the earlier Phase 1/2 work, along with
+their accompanying env vars, are confirmed applied — the app's been live and working since.)

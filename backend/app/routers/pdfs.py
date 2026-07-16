@@ -131,6 +131,24 @@ async def _topics_by_pdf(db: AsyncSession, pdf_ids: list[UUID]) -> dict[UUID, li
     return by_pdf
 
 
+async def _merge_manual_topics(db: AsyncSession, pdfs: list[Pdf], topics_by_pdf: dict[UUID, list[PdfTopicOut]]) -> None:
+    """Adds each PDF's manually-tagged `topic_id` (if set) into its topics
+    list when it isn't already there via extracted questions — the only way
+    a theory PDF (which always has zero extracted questions) ever shows a
+    topic. Mutates `topics_by_pdf` in place."""
+    manual_ids = {pdf.topic_id for pdf in pdfs if pdf.topic_id is not None}
+    if not manual_ids:
+        return
+    topic_rows = (await db.execute(select(Topic).where(Topic.id.in_(manual_ids)))).scalars().all()
+    topics_by_id = {t.id: t for t in topic_rows}
+    for pdf in pdfs:
+        if pdf.topic_id is None or pdf.topic_id not in topics_by_id:
+            continue
+        existing = topics_by_pdf.setdefault(pdf.id, [])
+        if not any(t.id == pdf.topic_id for t in existing):
+            existing.append(PdfTopicOut(id=pdf.topic_id, name=topics_by_id[pdf.topic_id].name))
+
+
 @router.get("", response_model=list[PdfOut])
 async def list_pdfs(
     db: AsyncSession = Depends(get_db),
@@ -146,7 +164,9 @@ async def list_pdfs(
             .order_by(Pdf.uploaded_at.desc())
         )
     ).all()
-    topics_by_pdf = await _topics_by_pdf(db, [pdf.id for pdf, _, _ in rows])
+    pdfs_only = [pdf for pdf, _, _ in rows]
+    topics_by_pdf = await _topics_by_pdf(db, [pdf.id for pdf in pdfs_only])
+    await _merge_manual_topics(db, pdfs_only, topics_by_pdf)
     return [
         PdfOut(
             id=pdf.id, original_name=pdf.original_name, status=pdf.status,
@@ -221,6 +241,11 @@ async def update_pdf(
 ):
     pdf = await _get_owned_pdf_or_404(db, pdf_id, parent_id)
     pdf.content_type = payload.content_type
+    if payload.topic_id is not None:
+        topic = await db.get(Topic, payload.topic_id)
+        if topic is None or (pdf.subject_id is not None and topic.subject_id != pdf.subject_id):
+            raise HTTPException(status_code=400, detail="Topic not found in this worksheet's subject.")
+        pdf.topic_id = payload.topic_id
     await db.commit()
     await db.refresh(pdf)
 
@@ -231,7 +256,9 @@ async def update_pdf(
     question_count = (
         await db.execute(select(func.count(Question.id)).where(Question.pdf_id == pdf.id))
     ).scalar_one()
-    topics = (await _topics_by_pdf(db, [pdf.id])).get(pdf.id, [])
+    topics_by_pdf = await _topics_by_pdf(db, [pdf.id])
+    await _merge_manual_topics(db, [pdf], topics_by_pdf)
+    topics = topics_by_pdf.get(pdf.id, [])
     return PdfOut(
         id=pdf.id, original_name=pdf.original_name, status=pdf.status,
         error_message=pdf.error_message, content_type=pdf.content_type,
