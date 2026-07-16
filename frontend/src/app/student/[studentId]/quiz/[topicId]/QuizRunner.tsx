@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import QuestionCard from "@/components/QuestionCard";
+import ReferenceMaterials from "@/components/ReferenceMaterials";
 import StreakBadge from "@/components/StreakBadge";
 import XPBar from "@/components/XPBar";
 import { revealAnswer, submitAnswer, useQuizProgress } from "@/lib/useQuizProgress";
@@ -70,6 +71,7 @@ export default function QuizRunner({
       {error && <p className="text-center text-rose-500">{error}</p>}
       {question && (
         <>
+          <ReferenceMaterials subjectId={question.subject_id} />
           <p className="mb-3 text-center text-sm font-medium text-sky-400">Question {questionNumber}</p>
           <QuestionCard
             key={question.id}

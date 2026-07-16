@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, PartyPopper } from "lucide-react";
 import QuestionCard from "@/components/QuestionCard";
+import ReferenceMaterials from "@/components/ReferenceMaterials";
 import StreakBadge from "@/components/StreakBadge";
 import XPBar from "@/components/XPBar";
 import { revealAnswer, submitAnswer, useQuizProgress } from "@/lib/useQuizProgress";
@@ -35,6 +36,7 @@ export default function PracticeSessionRunner({
   const { xpTotal, streakDays, celebrating, applyResult } = useQuizProgress(initialXpTotal, initialStreakDays);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetching on mount/topic/filter change is intentional
     setLoading(true);
     setError(null);
     fetch(`/api/quiz/questions?topic_id=${topicId}&filter=${filter}`)
@@ -129,13 +131,16 @@ export default function PracticeSessionRunner({
 
           <div className="flex-1">
             {question && (
-              <QuestionCard
-                key={question.id}
-                question={question}
-                onSubmit={handleSubmit}
-                onReveal={() => revealAnswer(question.id)}
-                onNext={handleNext}
-              />
+              <>
+                <ReferenceMaterials subjectId={question.subject_id} />
+                <QuestionCard
+                  key={question.id}
+                  question={question}
+                  onSubmit={handleSubmit}
+                  onReveal={() => revealAnswer(question.id)}
+                  onNext={handleNext}
+                />
+              </>
             )}
             {!question && (
               <div className="flex flex-col items-center gap-2 rounded-3xl bg-white p-10 text-center shadow-lg ring-1 ring-sky-100">

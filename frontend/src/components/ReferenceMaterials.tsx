@@ -10,6 +10,7 @@ export default function ReferenceMaterials({ subjectId }: { subjectId: string })
 
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting for a fresh fetch on subjectId change is intentional
     setPdfs(null);
     setError(null);
     fetch(`/api/pdfs/theory?subject_id=${subjectId}`)
