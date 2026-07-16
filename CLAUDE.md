@@ -180,12 +180,9 @@ its exact env-var list is now superseded by the "Deployment gotchas" section abo
 the connection pooler requirement or that Vercel only needs `BACKEND_URL`). Follow this file's gotchas section
 over `DEPLOY.md` where they conflict.
 
-**Not yet applied to production** (as of the parent-Library-topic work, 2026-07-15) — do this before that
-code reaches Render/Vercel:
-- Run `database/migrations/004_pdf_topic.sql` against the production Supabase project (Supabase SQL editor,
-  same as `001_init.sql`/`002`/`003` were — there's no Alembic). Adds `pdfs.topic_id` (nullable, `on delete
-  set null`) so a PDF — theory worksheets especially, which never get a topic via extracted questions — can
-  be tagged with a topic directly from the Library table.
-
-(Migrations `002_library_management.sql` and `003_ai_tutor.sql` from the earlier Phase 1/2 work, along with
-their accompanying env vars, are confirmed applied — the app's been live and working since.)
+All migrations through `004_pdf_topic.sql` (`pdfs.topic_id`, added 2026-07-15) are confirmed applied to the
+production Supabase project — the app's been live and working since. Migrations were run directly against
+the pooler `DATABASE_URL` in `backend/.env` using Node's `pg` client (pure JS, no native build needed —
+unlike `asyncpg`/`psycopg`, which can't install on this ARM64 Windows dev machine) rather than through the
+Supabase SQL editor UI; either works, there's no Alembic either way. Future migrations can use the same
+approach.

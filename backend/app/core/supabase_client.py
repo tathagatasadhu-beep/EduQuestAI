@@ -10,6 +10,11 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
+# Storage bucket names — shared here (rather than living in pdfs.py alone) so
+# quiz.py can sign question-diagram image URLs without a cross-router import.
+WORKSHEETS_BUCKET = "worksheets"
+QUESTION_IMAGES_BUCKET = "question-images"
+
 
 @lru_cache
 def get_supabase() -> Client:

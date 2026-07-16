@@ -98,6 +98,15 @@ export default function QuestionCard({
         </span>
       )}
 
+      {question.image_path && (
+        // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL, not a static/local asset next/image can optimize
+        <img
+          src={question.image_path}
+          alt="Question diagram"
+          className="mb-4 max-h-64 w-full rounded-xl object-contain ring-1 ring-sky-100"
+        />
+      )}
+
       <p className="mb-5 text-lg font-semibold text-zinc-800">{question.prompt_text}</p>
 
       {isMultipleChoice ? (

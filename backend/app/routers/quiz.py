@@ -24,6 +24,7 @@ student's own self-report (paired with reveal above) rather than an exact
 string match, since answers like proofs have no single canonical string —
 multiple_choice is unaffected and still auto-graded.
 """
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.supabase_client import QUESTION_IMAGES_BUCKET, get_supabase_admin
 from app.db.orm import AnswerKey, Attempt, Question, ReviewQueue, Student, Subject, Topic
 from app.db.session import get_db
 from app.models.schemas import AttemptResult, AttemptSubmit, QuestionOut, RevealOut
@@ -58,7 +60,18 @@ async def _topic_and_subject(db: AsyncSession, topic_id: UUID) -> tuple[Topic, S
     return topic, subject
 
 
-def _serialize_question(question: Question, subject: Subject, options: list[AnswerKey]) -> QuestionOut:
+async def _serialize_question(question: Question, subject: Subject, options: list[AnswerKey]) -> QuestionOut:
+    image_url = None
+    if question.image_path:
+        try:
+            admin = get_supabase_admin()
+            signed = await asyncio.to_thread(
+                admin.storage.from_(QUESTION_IMAGES_BUCKET).create_signed_url, question.image_path, 600
+            )
+            image_url = signed["signedURL"]
+        except Exception:
+            image_url = None  # non-fatal — the question is still usable without its diagram
+
     return QuestionOut(
         id=question.id,
         topic_id=question.topic_id,
@@ -66,7 +79,7 @@ def _serialize_question(question: Question, subject: Subject, options: list[Answ
         subject_name=subject.name,
         prompt_text=question.prompt_text,
         prompt_latex=question.prompt_latex,
-        image_path=question.image_path,
+        image_path=image_url,
         difficulty=question.difficulty,
         question_type=question.question_type,
         options=[{"option_label": o.option_label, "option_text": o.option_text} for o in options],
@@ -152,7 +165,7 @@ async def next_question(
         .all()
     )
 
-    return _serialize_question(question, subject, options)
+    return await _serialize_question(question, subject, options)
 
 
 @router.get("/questions", response_model=list[QuestionOut])
@@ -193,7 +206,7 @@ async def list_questions(
     for o in option_rows:
         options_by_question.setdefault(o.question_id, []).append(o)
 
-    return [_serialize_question(q, subject, options_by_question.get(q.id, [])) for q in questions]
+    return [await _serialize_question(q, subject, options_by_question.get(q.id, [])) for q in questions]
 
 
 @router.get("/reveal", response_model=RevealOut)

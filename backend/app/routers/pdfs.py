@@ -23,7 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Up
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.supabase_client import get_supabase_admin
+from app.core.supabase_client import QUESTION_IMAGES_BUCKET, WORKSHEETS_BUCKET, get_supabase_admin
 from app.db.orm import AnswerKey, Pdf, Question, StudentAssignment, Subject, Topic
 from app.db.session import SessionLocal, get_db
 from app.models.schemas import PdfOut, PdfTopicOut, PdfUpdate, PdfUploadOut, TheoryPdfOut
@@ -39,8 +39,9 @@ import pipeline as ingestion_pipeline  # noqa: E402
 
 router = APIRouter()
 
-BUCKET = "worksheets"
+BUCKET = WORKSHEETS_BUCKET
 _bucket_ready = False
+_image_bucket_ready = False
 
 
 def _ensure_bucket() -> None:
@@ -54,6 +55,21 @@ def _ensure_bucket() -> None:
             BUCKET, options={"public": False, "allowed_mime_types": ["application/pdf"]}
         )
     _bucket_ready = True
+
+
+def _ensure_image_bucket() -> None:
+    """A separate bucket from `worksheets` for cropped question-diagram
+    images, rather than loosening the PDF bucket's mime-type allowlist."""
+    global _image_bucket_ready
+    if _image_bucket_ready:
+        return
+    admin = get_supabase_admin()
+    existing = {b.id for b in admin.storage.list_buckets()}
+    if QUESTION_IMAGES_BUCKET not in existing:
+        admin.storage.create_bucket(
+            QUESTION_IMAGES_BUCKET, options={"public": False, "allowed_mime_types": ["image/jpeg", "image/png"]}
+        )
+    _image_bucket_ready = True
 
 
 def _upload_out(pdf: Pdf) -> PdfUploadOut:
@@ -344,6 +360,34 @@ async def _process_pdf(
 
             fixed_topic = await db.get(Topic, topic_id) if topic_id is not None else None
 
+            async def _store_question_image(image_url: str) -> str | None:
+                """Re-uploads an already-downloaded diagram to permanent
+                storage and returns its storage path, or None if there's
+                nothing to store / the upload fails (non-fatal — the
+                question is still usable without its diagram)."""
+                image_bytes = result.images.get(image_url)
+                if image_bytes is None:
+                    return None
+                await asyncio.to_thread(_ensure_image_bucket)
+                admin = get_supabase_admin()
+                # Mathpix cropped-image URLs sometimes carry a query string
+                # (e.g. "?height=200&width=300") — strip it before checking
+                # the extension so it isn't mistaken for part of the path.
+                url_path = image_url.split("?", 1)[0].lower()
+                ext = "png" if url_path.endswith(".png") else "jpg"
+                content_type = "image/png" if ext == "png" else "image/jpeg"
+                image_storage_path = f"{pdf.uploaded_by}/{pdf_id}/{uuid.uuid4()}.{ext}"
+                try:
+                    await asyncio.to_thread(
+                        admin.storage.from_(QUESTION_IMAGES_BUCKET).upload,
+                        image_storage_path,
+                        image_bytes,
+                        {"content-type": content_type},
+                    )
+                    return image_storage_path
+                except Exception:
+                    return None
+
             for eq in result.questions:
                 if fixed_topic is not None:
                     topic = fixed_topic
@@ -361,6 +405,8 @@ async def _process_pdf(
                         db.add(topic)
                         await db.flush()
 
+                image_path = await _store_question_image(eq.image_url) if eq.image_url else None
+
                 question = Question(
                     pdf_id=pdf_id,
                     topic_id=topic.id,
@@ -368,6 +414,7 @@ async def _process_pdf(
                     prompt_latex=eq.prompt_latex,
                     difficulty=eq.difficulty_guess,
                     question_type="multiple_choice" if len(eq.options) > 1 else "free_response",
+                    image_path=image_path,
                 )
                 db.add(question)
                 await db.flush()
