@@ -19,6 +19,7 @@ deactivation removes the questions from future serving (see
 quiz.py::next_question) while leaving history/mastery intact.
 """
 import asyncio
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -92,6 +93,19 @@ def _upload_out(pdf: Pdf) -> PdfUploadOut:
     )
 
 
+_UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_storage_filename(filename: str) -> str:
+    """Supabase Storage object keys reject spaces and some other characters
+    (confirmed live: a real filename with spaces got a 400 `InvalidKey` on
+    the direct-upload PUT, even though the signed URL itself was valid) — a
+    parent's original filename is never sanitized before this, so replace
+    anything that isn't alphanumeric/dot/underscore/hyphen. `Pdf.original_name`
+    stores the untouched original for display; only the storage key changes."""
+    return _UNSAFE_KEY_CHARS.sub("_", filename)
+
+
 @router.post("/upload-url", response_model=PdfUploadUrlOut)
 async def create_upload_url(
     payload: PdfUploadUrlRequest,
@@ -114,7 +128,7 @@ async def create_upload_url(
         if topic is None or (payload.subject_id is not None and topic.subject_id != payload.subject_id):
             raise HTTPException(status_code=400, detail="Topic not found in the selected subject.")
 
-    storage_path = f"{parent_id}/{uuid.uuid4()}_{payload.filename}"
+    storage_path = f"{parent_id}/{uuid.uuid4()}_{_safe_storage_filename(payload.filename)}"
     await asyncio.to_thread(_ensure_bucket)
     admin = get_supabase_admin()
     signed = await asyncio.to_thread(admin.storage.from_(BUCKET).create_signed_upload_url, storage_path)
