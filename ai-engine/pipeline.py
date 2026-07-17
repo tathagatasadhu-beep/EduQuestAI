@@ -155,6 +155,17 @@ share a diagram, give every one of them the same "image_url". Reserve the "optio
 that genuinely present predefined answer choices the student picks from (e.g. "A) 12  B) 14  C) 16") —
 that is the only case "options" should ever hold more than one entry with real answer content.
 
+Some worksheets include a separate, authoritative answer key — a table or list, often on its own
+page(s) and sometimes appearing before any question content at all, mapping each question's number/ID
+to its correct answer (e.g. rows like "1.1 ... B", "1.2 ... D"). When one is present, treat it as the
+SOURCE OF TRUTH: match each question to its key entry by question number/ID, and set that option's
+"is_correct" to true (all others false) instead of trying to work out or independently verify the
+answer yourself. This matters most for reading-comprehension / vocabulary-in-context / opinion-based
+questions, where there is no way to compute or reliably infer the intended answer the way you could for
+a math problem — always defer to an explicit key when the input contains one, even if you believe a
+different option looks right. Only fall back to your own judgment for questions with no matching key
+entry (e.g. no key was included at all, or the worksheet doesn't have one for that specific question).
+
 The markdown may contain image references for diagrams/figures (either markdown
 `![](https://cdn.mathpix.com/...)` syntax or LaTeX `\\includegraphics{https://cdn.mathpix.com/...}`
 syntax). When a question depends on a diagram (e.g. "determine which lines are parallel" next to a
