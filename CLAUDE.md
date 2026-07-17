@@ -92,6 +92,23 @@ assuming anything is a stub.
   most free-response questions) auto-grades via exact string match like before. Both are forward-only —
   worksheets uploaded before this change don't have diagrams or the self-assessment flag, and need
   re-uploading to pick them up.
+- **Multi-part-question extraction fix + reference pane relocation** (2026-07-17) — confirmed via production
+  data that problems with lettered sub-parts (a/b/c, each needing its own written answer) were being
+  extracted as fake multiple-choice questions, with the sub-part prompts turned into answer *options*
+  instead of separate gradable questions — `EXTRACTION_SYSTEM_PROMPT` in `ai-engine/pipeline.py` now
+  explicitly splits these into separate question objects instead (no schema/pipeline-logic change needed
+  beyond the prompt itself). Same prompt update also forbids leftover LaTeX in `prompt_text` (the only
+  field ever rendered to students), converting to plain Unicode instead. Separately, `ReferenceMaterials`
+  moved from inline-above-the-question to a persistent right-side pane at the page level
+  (`quiz/[topicId]/page.tsx`), and — for that pane specifically — now scopes by `pdfs.topic_id` instead of
+  subject (`GET /api/pdfs/theory` accepts either `subject_id` or `topic_id`); the subject-overview page's
+  usage is unchanged (still subject-scoped, browsing all of a subject's theory material).
+- **Security fix** (2026-07-17) — `student_assignments` was the only table with Row Level Security
+  disabled; combined with pre-existing `anon` grants and the public `SUPABASE_ANON_KEY` already embedded in
+  the Vercel bundle, this was a live public data-exposure hole (anyone could read/write the table via
+  Supabase's REST API). Fixed via migration `006_enable_rls_student_assignments.sql` — no policies needed,
+  since the backend's own Postgres role owns the tables and bypasses RLS regardless, same as the 8 other
+  tables that already had RLS enabled with no policies.
 
 ### What's still missing (confirmed via a full feature audit against the user's spec, 2026-07-08; re-checked 2026-07-13)
 
@@ -191,8 +208,8 @@ its exact env-var list is now superseded by the "Deployment gotchas" section abo
 the connection pooler requirement or that Vercel only needs `BACKEND_URL`). Follow this file's gotchas section
 over `DEPLOY.md` where they conflict.
 
-All migrations through `005_question_self_assessment.sql` (`questions.requires_self_assessment`, added
-2026-07-16) are confirmed applied to the
+All migrations through `006_enable_rls_student_assignments.sql` (closes a public data-exposure hole —
+`student_assignments` was the only table with Row Level Security disabled, added 2026-07-17) are confirmed applied to the
 production Supabase project — the app's been live and working since. Migrations were run directly against
 the pooler `DATABASE_URL` in `backend/.env` using Node's `pg` client (pure JS, no native build needed —
 unlike `asyncpg`/`psycopg`, which can't install on this ARM64 Windows dev machine) rather than through the

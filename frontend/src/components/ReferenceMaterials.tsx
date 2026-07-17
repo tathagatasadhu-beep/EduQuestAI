@@ -4,16 +4,20 @@ import { useEffect, useState } from "react";
 import { BookOpen, ExternalLink, Loader2 } from "lucide-react";
 import type { TheoryPdf } from "@/lib/api";
 
-export default function ReferenceMaterials({ subjectId }: { subjectId: string }) {
+type Scope = { subjectId: string } | { topicId: string };
+
+export default function ReferenceMaterials(props: Scope) {
+  const scopeKey = "subjectId" in props ? props.subjectId : props.topicId;
   const [pdfs, setPdfs] = useState<TheoryPdf[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting for a fresh fetch on subjectId change is intentional
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting for a fresh fetch on scope change is intentional
     setPdfs(null);
     setError(null);
-    fetch(`/api/pdfs/theory?subject_id=${subjectId}`)
+    const query = "subjectId" in props ? `subject_id=${props.subjectId}` : `topic_id=${props.topicId}`;
+    fetch(`/api/pdfs/theory?${query}`)
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Couldn't load reference materials.");
@@ -28,7 +32,8 @@ export default function ReferenceMaterials({ subjectId }: { subjectId: string })
     return () => {
       cancelled = true;
     };
-  }, [subjectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fetch keyed on scopeKey, not the whole props object
+  }, [scopeKey]);
 
   if (error) return <p className="mb-6 text-sm text-rose-500">{error}</p>;
 
@@ -41,8 +46,8 @@ export default function ReferenceMaterials({ subjectId }: { subjectId: string })
     );
   }
 
-  // Nothing to reference for this subject yet — skip the section rather
-  // than showing an empty box.
+  // Nothing to reference for this scope yet — skip the section rather than
+  // showing an empty box.
   if (pdfs.length === 0) return null;
 
   return (

@@ -197,7 +197,8 @@ async def list_pdfs(
 
 @router.get("/theory", response_model=list[TheoryPdfOut])
 async def list_theory_pdfs_for_student(
-    subject_id: UUID,
+    subject_id: UUID | None = None,
+    topic_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
     student: dict = Depends(get_current_student),
 ):
@@ -206,7 +207,23 @@ async def list_theory_pdfs_for_student(
     specific topic, grants access to that subject's theory PDFs). Signed
     URLs are generated fresh on each call since the storage bucket is
     private and the URL only needs to last long enough for the student to
-    click it, not to be cached."""
+    click it, not to be cached.
+
+    Exactly one of subject_id/topic_id must be given. subject_id (used on
+    the subject-overview page) returns every theory PDF for the subject.
+    topic_id (used on the practice-screen reference pane) narrows that down
+    to PDFs a parent has explicitly tagged to that one topic via
+    `pdfs.topic_id` — so a topic with no tagged theory PDF simply shows
+    nothing, even if the subject has other theory material."""
+    if (subject_id is None) == (topic_id is None):
+        raise HTTPException(status_code=400, detail="Provide exactly one of subject_id or topic_id.")
+
+    if topic_id is not None:
+        topic = await db.get(Topic, topic_id)
+        if topic is None:
+            raise HTTPException(status_code=404, detail="Topic not found.")
+        subject_id = topic.subject_id
+
     student_id = student["student_id"]
     assigned = (
         await db.execute(
@@ -218,13 +235,9 @@ async def list_theory_pdfs_for_student(
     if assigned is None:
         raise HTTPException(status_code=403, detail="This subject isn't assigned to you.")
 
-    pdfs = (
-        await db.execute(
-            select(Pdf)
-            .where(Pdf.subject_id == subject_id, Pdf.content_type == "theory", Pdf.deleted_at.is_(None))
-            .order_by(Pdf.uploaded_at.desc())
-        )
-    ).scalars().all()
+    pdf_stmt = select(Pdf).where(Pdf.content_type == "theory", Pdf.deleted_at.is_(None))
+    pdf_stmt = pdf_stmt.where(Pdf.topic_id == topic_id) if topic_id is not None else pdf_stmt.where(Pdf.subject_id == subject_id)
+    pdfs = (await db.execute(pdf_stmt.order_by(Pdf.uploaded_at.desc()))).scalars().all()
 
     admin = get_supabase_admin()
     results = []

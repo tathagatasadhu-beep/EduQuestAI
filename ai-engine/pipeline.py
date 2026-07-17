@@ -144,6 +144,17 @@ math/science worksheet, first identify the overall subject/course the worksheet 
 (e.g. "AP Calculus", "SAT Math", "Grade 8 Algebra" — short, matching how a course would be
 named in a school catalog), then split the content into individual questions.
 
+Many problems have lettered sub-parts (a, b, c, ...) that each require their own written answer — for
+example "Find: AC, AB, BC" followed by "a. Find AC  b. Find AB  c. Find BC". These are NOT multiple-choice
+options — the student is meant to solve and write an answer for every sub-part, not pick one. Emit each
+such sub-part as its OWN SEPARATE entry in the "questions" array, never as an "options" list. Each
+split-out question's "prompt_text" must restate enough of the shared given information to stand alone
+(e.g. "Given a circle with center O, angle AOC = 80°, radius 9cm. Find the perimeter of the shaded
+region.") plus its own specific instruction — don't just repeat the bare sub-part label. If the sub-parts
+share a diagram, give every one of them the same "image_url". Reserve the "options" field for problems
+that genuinely present predefined answer choices the student picks from (e.g. "A) 12  B) 14  C) 16") —
+that is the only case "options" should ever hold more than one entry with real answer content.
+
 The markdown may contain image references for diagrams/figures (either markdown
 `![](https://cdn.mathpix.com/...)` syntax or LaTeX `\\includegraphics{https://cdn.mathpix.com/...}`
 syntax). When a question depends on a diagram (e.g. "determine which lines are parallel" next to a
@@ -158,6 +169,14 @@ phrase — or whether it's open-ended with no single correct string (a proof, a 
 explanation, "show that...", "prove that...", "explain why..."). Set "requires_self_assessment" to
 true only for the open-ended case; false for everything else, including most free-response questions
 (e.g. "Solve for x: 2x+3=11" is false — it has one definite answer, "4").
+
+"prompt_text" is the ONLY version of the question ever shown to the student — it must be clean, plain,
+human-readable text with NO LaTeX commands or backslashes of any kind, even for symbols that don't have
+an obvious plain-text equivalent. Convert everything to plain Unicode instead: write "π" not "\\pi", "°"
+not "^\\circ", "√" not "\\sqrt", "∠ABC" not "\\angle ABC", "x²" not "x^2", and spell out notation like arcs
+as plain words ("arc AC") instead of LaTeX macros like "\\overparen{AC}". Never leave a raw LaTeX command
+in "prompt_text" just because a clean conversion isn't obvious — always find a plain-text or Unicode way
+to express it instead.
 
 Respond with a JSON object of exactly this shape, no prose, no markdown fences:
 {

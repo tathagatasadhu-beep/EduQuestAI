@@ -293,8 +293,13 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deletePdf: (token: string, pdfId: string) => request<void>(`/api/pdfs/${pdfId}`, { method: "DELETE", token }),
-  getTheoryPdfs: (token: string, subjectId: string) =>
-    request<TheoryPdf[]>(`/api/pdfs/theory?subject_id=${encodeURIComponent(subjectId)}`, { token }),
+  getTheoryPdfs: (token: string, scope: { subjectId: string } | { topicId: string }) =>
+    request<TheoryPdf[]>(
+      "subjectId" in scope
+        ? `/api/pdfs/theory?subject_id=${encodeURIComponent(scope.subjectId)}`
+        : `/api/pdfs/theory?topic_id=${encodeURIComponent(scope.topicId)}`,
+      { token }
+    ),
 
   // --- tutor chat ---
   tutorChat: (token: string, data: { subject_id: string; message: string; history: TutorChatMessage[] }) =>

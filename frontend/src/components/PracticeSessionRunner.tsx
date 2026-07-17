@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, PartyPopper } from "lucide-react";
 import QuestionCard from "@/components/QuestionCard";
-import ReferenceMaterials from "@/components/ReferenceMaterials";
 import StreakBadge from "@/components/StreakBadge";
 import XPBar from "@/components/XPBar";
 import { revealAnswer, submitAnswer, useQuizProgress } from "@/lib/useQuizProgress";
@@ -131,16 +130,13 @@ export default function PracticeSessionRunner({
 
           <div className="flex-1">
             {question && (
-              <>
-                <ReferenceMaterials subjectId={question.subject_id} />
-                <QuestionCard
-                  key={question.id}
-                  question={question}
-                  onSubmit={handleSubmit}
-                  onReveal={() => revealAnswer(question.id)}
-                  onNext={handleNext}
-                />
-              </>
+              <QuestionCard
+                key={question.id}
+                question={question}
+                onSubmit={handleSubmit}
+                onReveal={() => revealAnswer(question.id)}
+                onNext={handleNext}
+              />
             )}
             {!question && (
               <div className="flex flex-col items-center gap-2 rounded-3xl bg-white p-10 text-center shadow-lg ring-1 ring-sky-100">

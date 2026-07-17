@@ -1,0 +1,22 @@
+-- EduQuestAI: close a public data exposure -- student_assignments was the
+-- only table in the schema with Row Level Security disabled (flagged as
+-- CRITICAL by Supabase's own security advisor), while every other table
+-- already had RLS enabled. Combined with pre-existing broad `anon` grants
+-- on this table and the public SUPABASE_ANON_KEY already embedded in the
+-- Vercel frontend bundle (for the password-reset flow), this meant anyone
+-- who extracted that key could read/write the entire table directly via
+-- Supabase's REST API, unrestricted.
+--
+-- No policies are added, matching the other RLS-enabled tables that also
+-- have none (answer_keys, attempts, pdfs, questions, review_queue,
+-- subjects, topics, users) -- Postgres RLS default-denies the `anon`/
+-- `authenticated` roles when RLS is enabled with zero policies, and the
+-- backend's own Postgres role (used for all real app access, via
+-- DATABASE_URL / SQLAlchemy) owns these tables and bypasses RLS
+-- regardless, so this has zero functional impact on the app.
+--
+-- Applied directly to production on 2026-07-17 (Node's `pg` client against
+-- the pooler DATABASE_URL, per the pattern documented in CLAUDE.md); this
+-- file exists so a from-scratch DB rebuild from the migration files
+-- reproduces the same secure state.
+alter table public.student_assignments enable row level security;
