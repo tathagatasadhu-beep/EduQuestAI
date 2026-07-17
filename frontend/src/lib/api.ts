@@ -117,6 +117,8 @@ export type PdfUploadOut = {
   error_message: string | null;
 };
 
+export type PdfUploadUrlOut = { pdf_id: string; upload_url: string };
+
 export type PdfTopic = { id: string; name: string };
 export type TheoryPdf = { id: string; original_name: string; uploaded_at: string; url: string };
 
@@ -270,18 +272,22 @@ export const api = {
     }),
 
   // --- pdfs ---
-  uploadPdf: async (token: string, form: FormData): Promise<PdfUploadOut> => {
-    const res = await fetch(`${BACKEND_URL}/api/pdfs/upload`, {
+  // Two-step, direct-to-storage upload — see backend/app/routers/pdfs.py's
+  // module docstring for why (Vercel's serverless functions have a hard,
+  // non-configurable 4.5MB request body limit, so the file itself never
+  // passes through one; only these small JSON calls do).
+  createPdfUploadUrl: (
+    token: string,
+    data: { filename: string; subject_id?: string; topic_id?: string; content_type: "theory" | "practice" }
+  ) =>
+    request<PdfUploadUrlOut>("/api/pdfs/upload-url", {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, body.detail || res.statusText);
-    }
-    return res.json();
-  },
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  startPdfProcessing: (token: string, pdfId: string) =>
+    request<PdfUploadOut>(`/api/pdfs/${pdfId}/process`, { method: "POST", token }),
   pdfStatus: (token: string, pdfId: string) =>
     request<PdfUploadOut>(`/api/pdfs/${pdfId}/status`, { token }),
   listPdfs: (token: string) => request<PdfOut[]>("/api/pdfs", { token }),

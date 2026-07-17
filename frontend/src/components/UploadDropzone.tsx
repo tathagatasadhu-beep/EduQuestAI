@@ -152,45 +152,72 @@ export default function UploadDropzone({
   }
 
   async function uploadOne(file: File, uploadId: string) {
-    const form = new FormData();
-    form.append("file", file);
-    if (subjectId !== AUTO_DETECT) form.append("subject_id", subjectId);
-    if (topicId !== AUTO_GROUP_TOPICS) form.append("topic_id", topicId);
-    form.append("content_type", contentType);
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
+    function fail(message: string) {
+      setUploads((prev) => prev.map((u) => (u.id === uploadId ? { ...u, state: { phase: "error", message } } : u)));
+    }
+
+    // If the file already made it into Storage (step 1 succeeded) but a
+    // later step fails, clean up the now-orphaned `pending` row rather than
+    // leaving a stuck entry the parent has no way to retry.
+    let pdfId: string | null = null;
+
     try {
-      const res = await fetch("/api/pdfs/upload", { method: "POST", body: form, signal: controller.signal });
-      const data = await res.json();
-      if (!res.ok) {
-        setUploads((prev) =>
-          prev.map((u) => (u.id === uploadId ? { ...u, state: { phase: "error", message: data.error || "Upload failed." } } : u))
-        );
+      // Step 1: ask the backend for a signed, single-file upload slot —
+      // small JSON, well under any size limit.
+      const urlRes = await fetch("/api/pdfs/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          ...(subjectId !== AUTO_DETECT ? { subject_id: subjectId } : {}),
+          ...(topicId !== AUTO_GROUP_TOPICS ? { topic_id: topicId } : {}),
+          content_type: contentType,
+        }),
+        signal: controller.signal,
+      });
+      const urlData = await urlRes.json();
+      if (!urlRes.ok) {
+        fail(urlData.error || "Upload failed.");
         return;
       }
-      setUploads((prev) =>
-        prev.map((u) => (u.id === uploadId ? { ...u, state: { phase: "tracking", pdfId: data.id, status: data.status } } : u))
-      );
-      onUploaded?.(data);
-    } catch (err) {
-      const timedOut = err instanceof DOMException && err.name === "AbortError";
+      pdfId = urlData.pdf_id;
+
+      // Step 2: upload the file bytes directly to Supabase Storage — this
+      // never touches a Vercel serverless function, so its non-configurable
+      // 4.5MB request body limit (the actual cause of large PDFs failing
+      // instantly) doesn't apply here.
+      const fileForm = new FormData();
+      fileForm.append("file", file);
+      const putRes = await fetch(urlData.upload_url, { method: "PUT", body: fileForm, signal: controller.signal });
+      if (!putRes.ok) throw new Error(`Storage upload failed (${putRes.status})`);
+
+      // Step 3: tell the backend the file is in place so it can kick off
+      // the background OCR/extraction task.
+      const processRes = await fetch(`/api/pdfs/${pdfId}/process`, { method: "POST", signal: controller.signal });
+      const processData = await processRes.json();
+      if (!processRes.ok) {
+        fail(processData.error || "Upload failed.");
+        fetch(`/api/pdfs/${pdfId}`, { method: "DELETE" }).catch(() => {});
+        return;
+      }
+
       setUploads((prev) =>
         prev.map((u) =>
-          u.id === uploadId
-            ? {
-                ...u,
-                state: {
-                  phase: "error",
-                  message: timedOut
-                    ? "Upload timed out — the server may be waking up from idle. Please try again."
-                    : "Upload failed — check your connection and try again.",
-                },
-              }
-            : u
+          u.id === uploadId ? { ...u, state: { phase: "tracking", pdfId: processData.id, status: processData.status } } : u
         )
       );
+      onUploaded?.(processData);
+    } catch (err) {
+      const timedOut = err instanceof DOMException && err.name === "AbortError";
+      fail(
+        timedOut
+          ? "Upload timed out — the server may be waking up from idle. Please try again."
+          : "Upload failed — check your connection and try again."
+      );
+      if (pdfId) fetch(`/api/pdfs/${pdfId}`, { method: "DELETE" }).catch(() => {});
     } finally {
       clearTimeout(timeoutId);
     }

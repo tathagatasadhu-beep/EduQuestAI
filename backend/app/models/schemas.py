@@ -165,6 +165,18 @@ class PdfUploadOut(BaseModel):
     error_message: Optional[str] = None
 
 
+class PdfUploadUrlRequest(BaseModel):
+    filename: str
+    subject_id: Optional[UUID] = None
+    topic_id: Optional[UUID] = None
+    content_type: Literal["theory", "practice"] = "practice"
+
+
+class PdfUploadUrlOut(BaseModel):
+    pdf_id: UUID
+    upload_url: str
+
+
 class PdfTopicOut(BaseModel):
     id: UUID
     name: str

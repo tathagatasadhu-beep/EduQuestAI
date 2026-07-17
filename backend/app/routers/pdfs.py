@@ -1,10 +1,15 @@
 """
 PDF upload/ingestion router — real implementation.
 
-Upload stores the file in a private, parent-scoped path in Supabase Storage,
-inserts a `pdfs` row (status='pending'), and kicks off a background task that
-runs the OCR + LLM extraction pipeline (ai-engine/pipeline.py) and writes the
-resulting questions/answer_keys, updating `pdfs.status` along the way.
+Upload is a two-step, direct-to-storage flow (`create_upload_url` then
+`process_uploaded_pdf`): the browser PUTs the file straight to Supabase
+Storage using a signed URL instead of sending it through this backend, so a
+large worksheet/answer-key PDF never has to pass through Vercel's
+serverless-function request-body limit (4.5MB, non-configurable). Once
+storage confirms the direct upload, a background task downloads the file
+back from Storage, runs the OCR + LLM extraction pipeline
+(ai-engine/pipeline.py), and writes the resulting questions/answer_keys,
+updating `pdfs.status` along the way.
 
 Deletion is soft: the `pdfs` row gets `deleted_at` set and its extracted
 questions get `is_active=False` instead of being hard-deleted. Questions
@@ -19,14 +24,22 @@ import uuid
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.supabase_client import QUESTION_IMAGES_BUCKET, WORKSHEETS_BUCKET, get_supabase_admin
 from app.db.orm import AnswerKey, Pdf, Question, StudentAssignment, Subject, Topic
 from app.db.session import SessionLocal, get_db
-from app.models.schemas import PdfOut, PdfTopicOut, PdfUpdate, PdfUploadOut, TheoryPdfOut
+from app.models.schemas import (
+    PdfOut,
+    PdfTopicOut,
+    PdfUpdate,
+    PdfUploadOut,
+    PdfUploadUrlOut,
+    PdfUploadUrlRequest,
+    TheoryPdfOut,
+)
 from app.routers.auth import get_current_parent_id, get_current_student
 
 # ai-engine/ is a sibling of backend/ with a hyphen in its name, so it can't be
@@ -79,51 +92,61 @@ def _upload_out(pdf: Pdf) -> PdfUploadOut:
     )
 
 
-@router.post("/upload", response_model=PdfUploadOut)
-async def upload_pdf(
-    background_tasks: BackgroundTasks,
-    file: UploadFile,
-    subject_id: UUID | None = Form(None),
-    topic_id: UUID | None = Form(None),
-    content_type: str = Form("practice"),
+@router.post("/upload-url", response_model=PdfUploadUrlOut)
+async def create_upload_url(
+    payload: PdfUploadUrlRequest,
     db: AsyncSession = Depends(get_db),
     parent_id: UUID = Depends(get_current_parent_id),
 ):
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
-    if content_type not in ("theory", "practice"):
+    """Step 1 of 2 for a worksheet upload — the browser then PUTs the file
+    bytes directly to `upload_url` (Supabase Storage), bypassing this
+    backend and, more importantly, Vercel's 4.5MB serverless-function
+    request-body limit that a large worksheet/answer-key PDF can exceed.
+    Once that direct upload finishes, the browser calls `POST
+    /{pdf_id}/process` to kick off extraction (see below). The bucket's own
+    `allowed_mime_types: ["application/pdf"]` (see `_ensure_bucket`) enforces
+    the PDF-only rule at the storage layer, since this backend never sees
+    the file's actual content-type in this flow."""
+    if payload.content_type not in ("theory", "practice"):
         raise HTTPException(status_code=400, detail="content_type must be 'theory' or 'practice'.")
-    if topic_id is not None:
-        topic = await db.get(Topic, topic_id)
-        if topic is None or (subject_id is not None and topic.subject_id != subject_id):
+    if payload.topic_id is not None:
+        topic = await db.get(Topic, payload.topic_id)
+        if topic is None or (payload.subject_id is not None and topic.subject_id != payload.subject_id):
             raise HTTPException(status_code=400, detail="Topic not found in the selected subject.")
 
-    pdf_bytes = await file.read()
-    storage_path = f"{parent_id}/{uuid.uuid4()}_{file.filename}"
-
+    storage_path = f"{parent_id}/{uuid.uuid4()}_{payload.filename}"
     await asyncio.to_thread(_ensure_bucket)
     admin = get_supabase_admin()
-    await asyncio.to_thread(
-        admin.storage.from_(BUCKET).upload,
-        storage_path,
-        pdf_bytes,
-        {"content-type": "application/pdf"},
-    )
+    signed = await asyncio.to_thread(admin.storage.from_(BUCKET).create_signed_upload_url, storage_path)
 
     pdf = Pdf(
         uploaded_by=parent_id,
-        subject_id=subject_id,
+        subject_id=payload.subject_id,
+        topic_id=payload.topic_id,
         storage_path=storage_path,
-        original_name=file.filename,
+        original_name=payload.filename,
         status="pending",
-        content_type=content_type,
+        content_type=payload.content_type,
     )
     db.add(pdf)
     await db.commit()
     await db.refresh(pdf)
 
-    background_tasks.add_task(_process_pdf, pdf.id, subject_id, topic_id, pdf_bytes, file.filename)
+    return PdfUploadUrlOut(pdf_id=pdf.id, upload_url=signed["signed_url"])
 
+
+@router.post("/{pdf_id}/process", response_model=PdfUploadOut)
+async def process_uploaded_pdf(
+    pdf_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    """Step 2 of 2 — called once the browser's direct-to-Storage upload
+    (from `create_upload_url` above) has finished, so the background OCR +
+    extraction pipeline has something to actually read."""
+    pdf = await _get_owned_pdf_or_404(db, pdf_id, parent_id)
+    background_tasks.add_task(_process_pdf, pdf.id)
     return _upload_out(pdf)
 
 
@@ -334,17 +357,19 @@ async def pdf_status(
     return _upload_out(pdf)
 
 
-async def _process_pdf(
-    pdf_id: UUID, subject_id: UUID | None, topic_id: UUID | None, pdf_bytes: bytes, filename: str
-) -> None:
+async def _process_pdf(pdf_id: UUID) -> None:
     """Runs after the response is sent, so it opens its own DB session —
-    the request's session is long gone by the time this executes.
+    the request's session is long gone by the time this executes. The file
+    itself was uploaded directly to Storage by the browser (see
+    `create_upload_url`/`process_uploaded_pdf` above), not passed through
+    this backend, so the first thing this does is download it back.
 
-    subject_id is None when the parent didn't pick one at upload time — in
-    that case the pipeline's own subject_guess resolves-or-creates one here,
-    the same dedup-by-name pattern used below when topic_id also isn't given.
+    pdf.subject_id is None when the parent didn't pick one at upload time —
+    in that case the pipeline's own subject_guess resolves-or-creates one
+    here, the same dedup-by-name pattern used below when pdf.topic_id also
+    isn't set.
 
-    topic_id, when the parent picks one at upload time, assigns every
+    pdf.topic_id, when the parent picks one at upload time, assigns every
     extracted question to that single topic instead of the AI's per-question
     topic_guess — the guess runs one LLM call per worksheet with no visibility
     into topics already in the library, so left alone it tends to invent a
@@ -356,9 +381,12 @@ async def _process_pdf(
         await db.commit()
 
         try:
-            result = await asyncio.to_thread(ingestion_pipeline.run_pipeline, pdf_bytes, filename)
+            admin = get_supabase_admin()
+            pdf_bytes = await asyncio.to_thread(admin.storage.from_(BUCKET).download, pdf.storage_path)
+            result = await asyncio.to_thread(ingestion_pipeline.run_pipeline, pdf_bytes, pdf.original_name)
 
-            resolved_subject_id = subject_id
+            topic_id = pdf.topic_id
+            resolved_subject_id = pdf.subject_id
             if resolved_subject_id is None:
                 subject_name = result.subject_guess.strip()
                 subject = (
