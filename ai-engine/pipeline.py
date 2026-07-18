@@ -189,16 +189,32 @@ as plain words ("arc AC") instead of LaTeX macros like "\\overparen{AC}". Never 
 in "prompt_text" just because a clean conversion isn't obvious — always find a plain-text or Unicode way
 to express it instead.
 
-Transcribe every passage and instructional line COMPLETELY AND VERBATIM — never summarize, shorten, or
-drop any part of it to save space, no matter how long the passage is or how many questions the worksheet
-has. This especially includes trailing instructional lines that repeat across many questions (e.g. "Which
-choice completes the text with the most logical and precise word or phrase?" or "As used in the text,
-what does the word \"X\" most nearly mean?") — include that line in full every single time it appears,
-even though it looks repetitive. Never insert an ellipsis ("..." or "…") anywhere in "prompt_text" in
-place of text you decided not to transcribe — if you find yourself about to write "...", go back and
-write the actual missing words instead. If the original text contains a fill-in-the-blank blank (usually
-shown as a run of underscores, e.g. "______", in a "which choice completes the text" style question),
-preserve it verbatim as a run of underscores — never replace it with an ellipsis or omit it.
+Transcribe every passage and instructional line COMPLETELY AND VERBATIM, copying the source's actual words
+in order — never summarize, shorten, paraphrase, or rewrite it in different words to save space or to make
+it read more smoothly, no matter how long the passage is or how many questions the worksheet has. This
+especially includes a trailing instructional line specific to that question (e.g. "Which choice completes
+the text with the most logical and precise word or phrase?" or "As used in the text, what does the word
+\"X\" most nearly mean?") — copy that question's own instructional line in full WHEN THE SOURCE ACTUALLY
+CONTAINS ONE FOR THAT QUESTION. Never add, invent, or repeat an instructional line for a question that
+doesn't have its own in the source — e.g. a vocabulary-in-context question whose source only has "As used
+in the text, what does the word X most nearly mean?" must never also get "Which choice completes the
+text..." tacked on; each question gets exactly the instructional line its own source text actually has,
+never more, never a different one.
+
+If the original text contains a fill-in-the-blank blank (usually shown as a run of underscores, e.g.
+"______", or a LaTeX placeholder like "$\\_\\_\\_\\_$", in a "which choice completes the text" style
+question), preserve it verbatim as a run of underscores in "prompt_text" — never replace it with an
+ellipsis, and never simply omit it while continuing the sentence around it.
+
+CRITICAL — never fabricate content to patch a broken source: some OCR input is itself incomplete for a
+given question (the passage cuts off mid-sentence with no fill-in-the-blank marker at all, or otherwise
+doesn't contain enough to actually pose the question). When that happens, do NOT invent, guess, paraphrase,
+or reconstruct a plausible-sounding replacement sentence or ending — even one that would fit the answer
+choices grammatically, and even though this contradicts the "transcribe completely" instruction above; an
+incomplete source overrides it. Writing a made-up sentence is worse than an ellipsis, because it looks
+legitimate but teaches the student something that was never in the source. Instead, simply OMIT that
+question from the "questions" array entirely and move on to the next one. It is always better to return
+fewer, fully genuine questions than to fill gaps with fabricated text.
 
 When a question consists of a quoted/indented excerpt followed by a separate instructional question line
 (e.g. a block-quoted passage followed by "As used in the text, what does the word ... most nearly
@@ -206,9 +222,10 @@ mean?"), put a blank line (two newline characters) between the excerpt and the i
 "prompt_text" so they render as visually distinct paragraphs, matching how the original document
 separates them.
 
-The "questions" array must contain EVERY question present in the input, however many there are — a
-58-question worksheet must produce 58 entries. Never stop early, skip, merge, or drop questions to save
-output length; completeness matters more than brevity here.
+The "questions" array must contain one entry for every genuinely complete question present in the input,
+however many that is — don't stop early, skip, or merge complete questions just to save output length. But
+per the CRITICAL rule above, "complete" is required: never pad the count by inventing content for a
+question whose source text was itself incomplete.
 
 Respond with a JSON object of exactly this shape, no prose, no markdown fences:
 {
@@ -288,6 +305,13 @@ def _extract_questions_chunk(client: OpenAI, ocr_text: str, depth: int = 0) -> t
         model=EXTRACTION_MODEL,
         response_format={"type": "json_object"},
         max_tokens=_MAX_COMPLETION_TOKENS,
+        # This is a transcription task, not a creative one — a nonzero
+        # temperature is exactly what let the model "helpfully" invent a
+        # plausible-sounding replacement sentence for source text that was
+        # itself cut off in the OCR input (confirmed against real Mathpix
+        # output: it fabricated grammatically-fitting but factually
+        # different passage content rather than flagging the gap).
+        temperature=0,
         messages=[
             {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": ocr_text},
