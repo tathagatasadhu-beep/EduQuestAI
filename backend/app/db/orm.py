@@ -119,6 +119,9 @@ class Question(Base):
     question_type: Mapped[str] = mapped_column(String, default="multiple_choice")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     requires_self_assessment: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Position within its source PDF (0-based), so quiz/practice ordering can
+    # match the worksheet instead of falling back to a random UUID order.
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AnswerKey(Base):

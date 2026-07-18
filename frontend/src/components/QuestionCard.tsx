@@ -1,10 +1,27 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { BookmarkPlus, CheckCircle2, Loader2, MessageCircleQuestion, XCircle } from "lucide-react";
 import type { AttemptResult, QuestionOut } from "@/lib/api";
 import MathKeyboard, { type MathToken } from "@/components/MathKeyboard";
 import TutorChat from "@/components/TutorChat";
+
+// Fill-in-the-blank questions ("Which choice completes the text...") carry
+// their blank as a run of underscores straight from the worksheet — render
+// it as a visible blank line instead of tiny/cramped underscore characters.
+const BLANK_PATTERN = /_{3,}/g;
+
+function renderPromptText(text: string) {
+  const parts = text.split(BLANK_PATTERN);
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      {part}
+      {i < parts.length - 1 && (
+        <span className="mx-1 inline-block w-16 border-b-[3px] border-zinc-500 align-middle" aria-hidden="true" />
+      )}
+    </Fragment>
+  ));
+}
 
 export default function QuestionCard({
   question,
@@ -110,7 +127,7 @@ export default function QuestionCard({
         />
       )}
 
-      <p className="mb-5 text-lg font-semibold text-zinc-800">{question.prompt_text}</p>
+      <p className="mb-5 whitespace-pre-wrap text-lg font-semibold text-zinc-800">{renderPromptText(question.prompt_text)}</p>
 
       {isMultipleChoice ? (
         <div className="flex flex-col gap-2">

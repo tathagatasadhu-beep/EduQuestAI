@@ -189,6 +189,27 @@ as plain words ("arc AC") instead of LaTeX macros like "\\overparen{AC}". Never 
 in "prompt_text" just because a clean conversion isn't obvious — always find a plain-text or Unicode way
 to express it instead.
 
+Transcribe every passage and instructional line COMPLETELY AND VERBATIM — never summarize, shorten, or
+drop any part of it to save space, no matter how long the passage is or how many questions the worksheet
+has. This especially includes trailing instructional lines that repeat across many questions (e.g. "Which
+choice completes the text with the most logical and precise word or phrase?" or "As used in the text,
+what does the word \"X\" most nearly mean?") — include that line in full every single time it appears,
+even though it looks repetitive. Never insert an ellipsis ("..." or "…") anywhere in "prompt_text" in
+place of text you decided not to transcribe — if you find yourself about to write "...", go back and
+write the actual missing words instead. If the original text contains a fill-in-the-blank blank (usually
+shown as a run of underscores, e.g. "______", in a "which choice completes the text" style question),
+preserve it verbatim as a run of underscores — never replace it with an ellipsis or omit it.
+
+When a question consists of a quoted/indented excerpt followed by a separate instructional question line
+(e.g. a block-quoted passage followed by "As used in the text, what does the word ... most nearly
+mean?"), put a blank line (two newline characters) between the excerpt and the instructional line in
+"prompt_text" so they render as visually distinct paragraphs, matching how the original document
+separates them.
+
+The "questions" array must contain EVERY question present in the input, however many there are — a
+58-question worksheet must produce 58 entries. Never stop early, skip, merge, or drop questions to save
+output length; completeness matters more than brevity here.
+
 Respond with a JSON object of exactly this shape, no prose, no markdown fences:
 {
   "subject_guess": "short subject/course name for the whole worksheet",
@@ -224,22 +245,79 @@ def _parse_question(item: dict) -> ExtractedQuestion:
     )
 
 
-def extract_questions(ocr_text: str) -> ExtractionResult:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is not configured.")
+# gpt-4o's hard cap on a single response. Requesting it explicitly (instead
+# of leaving max_tokens unset, which defaults much lower) avoids the model
+# silently running out of room mid-JSON on worksheets with many questions.
+_MAX_COMPLETION_TOKENS = 16384
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+# answer-key tables/headings sometimes sit on their own page, separate from
+# the questions they grade — if we split the OCR text to keep a single LLM
+# call's output small enough to finish, the key must stay attached to BOTH
+# halves so either half can still match its questions to the right answer.
+_ANSWER_KEY_HEADING = re.compile(r"answer\s*key", re.IGNORECASE)
+
+# How many times we're willing to halve the input before giving up and
+# accepting whatever the last successful call returned — bounds worst-case
+# recursion for a pathologically huge worksheet.
+_MAX_SPLIT_DEPTH = 4
+
+
+def _split_ocr_text(text: str) -> tuple[str, str]:
+    """Splits OCR markdown roughly in half at the nearest paragraph boundary
+    (never mid-question), keeping any answer-key section attached to both
+    halves so ID-based answer matching still works after the split."""
+    key_match = _ANSWER_KEY_HEADING.search(text)
+    body, key_block = (text[: key_match.start()], text[key_match.start() :]) if key_match else (text, "")
+
+    midpoint = len(body) // 2
+    boundary = body.rfind("\n\n", 0, midpoint)
+    if boundary == -1:
+        boundary = body.find("\n\n", midpoint)
+    if boundary == -1:
+        boundary = midpoint
+
+    left, right = body[:boundary], body[boundary:]
+    if key_block:
+        left += "\n\n" + key_block
+        right += "\n\n" + key_block
+    return left, right
+
+
+def _extract_questions_chunk(client: OpenAI, ocr_text: str, depth: int = 0) -> tuple[list[ExtractedQuestion], str]:
     response = client.chat.completions.create(
         model=EXTRACTION_MODEL,
         response_format={"type": "json_object"},
+        max_tokens=_MAX_COMPLETION_TOKENS,
         messages=[
             {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": ocr_text},
         ],
     )
-    raw = json.loads(response.choices[0].message.content)
+    choice = response.choices[0]
+
+    # finish_reason == "length" means the model's output was cut off before
+    # it finished the JSON — almost always because the worksheet had more
+    # questions than fit in one response. Rather than accept a truncated
+    # (and possibly unparseable) result, split the input and retry each half
+    # separately, so each call has a smaller worksheet to fully transcribe.
+    if choice.finish_reason == "length" and depth < _MAX_SPLIT_DEPTH and len(ocr_text) > 2000:
+        left, right = _split_ocr_text(ocr_text)
+        left_questions, subject_guess = _extract_questions_chunk(client, left, depth + 1)
+        right_questions, _ = _extract_questions_chunk(client, right, depth + 1)
+        return left_questions + right_questions, subject_guess
+
+    raw = json.loads(choice.message.content)
     questions = [_parse_question(item) for item in raw["questions"]]
     subject_guess = (raw.get("subject_guess") or "General").strip()
+    return questions, subject_guess
+
+
+def extract_questions(ocr_text: str) -> ExtractionResult:
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    questions, subject_guess = _extract_questions_chunk(client, ocr_text)
     return ExtractionResult(subject_guess=subject_guess, questions=questions, ocr_text=ocr_text)
 
 

@@ -1,0 +1,11 @@
+-- EduQuestAI: questions were served in random UUID order instead of the
+-- worksheet's original order (parent feedback: "I will go with the same
+-- order as in the PDF for the student to answer -- this makes more sense
+-- than random"). Add a per-question position so ingestion can record PDF
+-- order and the quiz/practice endpoints can sort by it.
+--
+-- Existing rows all get 0 (no original order is recoverable for them, since
+-- there was never an ordering column or an insertion timestamp to fall back
+-- on) -- they'll just keep whatever order they already render in today.
+-- Only worksheets uploaded after this migration get real ordering.
+alter table questions add column sort_order integer not null default 0;

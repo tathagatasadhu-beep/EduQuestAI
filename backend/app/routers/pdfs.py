@@ -443,7 +443,7 @@ async def _process_pdf(pdf_id: UUID) -> None:
                 except Exception:
                     return None
 
-            for eq in result.questions:
+            for sort_order, eq in enumerate(result.questions):
                 if fixed_topic is not None:
                     topic = fixed_topic
                 else:
@@ -471,6 +471,7 @@ async def _process_pdf(pdf_id: UUID) -> None:
                     question_type="multiple_choice" if len(eq.options) > 1 else "free_response",
                     image_path=image_path,
                     requires_self_assessment=eq.requires_self_assessment,
+                    sort_order=sort_order,
                 )
                 db.add(question)
                 await db.flush()

@@ -141,7 +141,7 @@ async def next_question(
         fresh_stmt = (
             select(Question)
             .where(Question.topic_id == topic_id, Question.is_active.is_(True), Question.id.notin_(attempted_ids))
-            .order_by(func.random())
+            .order_by(Question.sort_order, Question.id)
             .limit(1)
         )
         question = (await db.execute(fresh_stmt)).scalars().first()
@@ -194,7 +194,7 @@ async def list_questions(
         stmt = stmt.join(Attempt, Attempt.question_id == Question.id).where(
             Attempt.student_id == student_id, Attempt.attempt_number == 2, Attempt.is_correct.is_(False)
         )
-    stmt = stmt.order_by(Question.id)
+    stmt = stmt.order_by(Question.sort_order, Question.id)
 
     questions = (await db.execute(stmt)).scalars().all()
     if not questions:
