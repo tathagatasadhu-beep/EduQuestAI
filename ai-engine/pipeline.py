@@ -11,17 +11,31 @@ Flow:
      immediately (see `_extract_image_urls`/`_download_images`) since the
      source retention window is only ~30 days, too short to rely on for a
      student answering the same worksheet months later.
-  2. Feed the OCR markdown to an LLM (OpenAI) with a structured-output prompt
-     that splits it into discrete questions, matches each to its answer key,
-     tags a topic name + difficulty, and best-effort matches each question to
-     one of the image URLs found in step 1, if any.
+  1b. Optionally, also OCR the same PDF via Google Document AI
+      (`document_ai_ocr`) as a cheap cross-check. Confirmed against real
+      production data that Mathpix sometimes mis-crops a multi-line question
+      raster image, consistently losing the tail of the sentence — a second,
+      independent OCR reading lets the extraction LLM tell "the source
+      genuinely ends here" apart from "Mathpix specifically missed this."
+      This step is entirely optional and non-fatal: if Document AI isn't
+      configured or the call fails for any reason, the pipeline proceeds on
+      Mathpix alone, same as before this existed.
+  2. Feed the OCR markdown (one or both sources, clearly labeled when both
+     are present) to an LLM (OpenAI) with a structured-output prompt that
+     splits it into discrete questions, matches each to its answer key, tags
+     a topic name + difficulty, best-effort matches each question to one of
+     the image URLs found in step 1, and reconciles the two OCR sources
+     per-question when both are present.
   3. The caller (pdfs.py's background task) writes the returned questions
      into `questions`/`answer_keys`, re-uploads any matched image bytes to
      permanent storage, and updates `pdfs.status`.
 
 Requires MATHPIX_APP_ID/MATHPIX_APP_KEY and OPENAI_API_KEY to be set — see
-.env.example. This module makes real network calls; there's no offline mode.
+.env.example. GOOGLE_APPLICATION_CREDENTIALS_JSON/GOOGLE_DOCUMENT_AI_* are
+optional (step 1b is skipped entirely if unset). This module makes real
+network calls; there's no offline mode.
 """
+import base64
 import json
 import os
 import re
@@ -29,6 +43,8 @@ import time
 from dataclasses import dataclass, field
 
 import httpx
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import service_account
 from openai import OpenAI
 
 MATHPIX_APP_ID = os.environ.get("MATHPIX_APP_ID", "")
@@ -38,6 +54,31 @@ EXTRACTION_MODEL = os.environ.get("OPENAI_EXTRACTION_MODEL", "gpt-4o")
 
 MATHPIX_POLL_INTERVAL_SECONDS = 3
 MATHPIX_POLL_TIMEOUT_SECONDS = 180
+
+# Cross-check OCR pass (see document_ai_ocr()) — cheap, general-purpose OCR
+# run alongside Mathpix specifically to catch cases where Mathpix mis-crops a
+# multi-line question raster image. Optional: if unset, the pipeline just
+# runs on Mathpix alone, same as before.
+#
+# Document AI's REST API rejects plain API keys outright (confirmed via a
+# live 401 "API keys are not supported by this API" response) — it needs a
+# real service-account identity. GOOGLE_APPLICATION_CREDENTIALS_JSON holds
+# that service account's key file content directly as a single-line JSON
+# string (not a file path — Render's env vars are the simplest place to put
+# this without managing an extra file/mount), used to mint short-lived OAuth2
+# access tokens on demand via google-auth.
+GOOGLE_APPLICATION_CREDENTIALS_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
+GOOGLE_DOCUMENT_AI_PROJECT_ID = os.environ.get("GOOGLE_DOCUMENT_AI_PROJECT_ID", "")
+GOOGLE_DOCUMENT_AI_LOCATION = os.environ.get("GOOGLE_DOCUMENT_AI_LOCATION", "")
+GOOGLE_DOCUMENT_AI_PROCESSOR_ID = os.environ.get("GOOGLE_DOCUMENT_AI_PROCESSOR_ID", "")
+_DOCUMENT_AI_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
+# The synchronous `:process` endpoint used here caps out around 15 pages —
+# longer documents need Document AI's async batchProcess (writing to GCS
+# instead of getting an inline response), which this integration doesn't
+# implement. Worksheets over the limit just skip the cross-check pass
+# (non-fatal — see document_ai_ocr()), same as any other best-effort step.
+DOCUMENT_AI_SYNC_PAGE_LIMIT = 15
 
 # Matches both markdown image syntax and Mathpix's LaTeX figure syntax, e.g.:
 #   ![](https://cdn.mathpix.com/cropped/abc123.jpg)
@@ -103,6 +144,65 @@ def ocr_pdf(pdf_bytes: bytes, filename: str) -> str:
         md_resp = client.get(f"https://api.mathpix.com/v3/pdf/{mathpix_pdf_id}.md", headers=auth_headers)
         md_resp.raise_for_status()
         return md_resp.text
+
+
+def document_ai_ocr(pdf_bytes: bytes) -> str | None:
+    """Runs Google Document AI's general-purpose OCR processor on the same
+    PDF, as a cheap cross-check alongside Mathpix. Confirmed against real
+    production data that Mathpix mis-crops some multi-line question raster
+    images, consistently losing the tail of the sentence on retries of the
+    identical file — a second, independent OCR reading lets the extraction
+    LLM tell "the source genuinely ends here" apart from "Mathpix specifically
+    missed this part," instead of relying on Mathpix alone.
+
+    Returns None (skipped, not an error) if Document AI isn't configured, the
+    synchronous `:process` endpoint's ~15-page limit is exceeded, or the call
+    fails for any other reason (auth, network, quota) — this is a best-effort
+    cross-check, not the primary OCR source, so any failure here just means
+    the pipeline falls back to Mathpix alone, same as before this existed.
+    """
+    if not (
+        GOOGLE_APPLICATION_CREDENTIALS_JSON
+        and GOOGLE_DOCUMENT_AI_PROJECT_ID
+        and GOOGLE_DOCUMENT_AI_LOCATION
+        and GOOGLE_DOCUMENT_AI_PROCESSOR_ID
+    ):
+        return None
+
+    try:
+        credentials_info = json.loads(GOOGLE_APPLICATION_CREDENTIALS_JSON)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info, scopes=_DOCUMENT_AI_SCOPES
+        )
+        credentials.refresh(GoogleAuthRequest())
+    except Exception:
+        return None
+
+    url = (
+        f"https://{GOOGLE_DOCUMENT_AI_LOCATION}-documentai.googleapis.com/v1/"
+        f"projects/{GOOGLE_DOCUMENT_AI_PROJECT_ID}/locations/{GOOGLE_DOCUMENT_AI_LOCATION}/"
+        f"processors/{GOOGLE_DOCUMENT_AI_PROCESSOR_ID}:process"
+    )
+    body = {
+        "rawDocument": {
+            "content": base64.b64encode(pdf_bytes).decode("ascii"),
+            "mimeType": "application/pdf",
+        }
+    }
+    try:
+        with httpx.Client(timeout=120) as client:
+            resp = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {credentials.token}",
+                    "Content-Type": "application/json; charset=utf-8",
+                },
+                json=body,
+            )
+            resp.raise_for_status()
+            return resp.json().get("document", {}).get("text") or None
+    except Exception:
+        return None
 
 
 def _extract_image_urls(markdown: str) -> list[str]:
@@ -221,6 +321,19 @@ it looks legitimate but teaches the student something that was never in the sour
 version is *also* wrong, because it presents an unanswerable question as a normal one. Instead, simply OMIT
 that question from the "questions" array entirely and move on to the next one. It is always better to
 return fewer, fully genuine, fully answerable questions than to include a broken one in any form.
+
+The input may contain either ONE OCR reading of the worksheet, or TWO independent OCR readings clearly
+marked "=== OCR SOURCE 1 (Mathpix...) ===" and "=== OCR SOURCE 2 (Google Document AI...) ===" — when both
+are present, they are two separate OCR attempts on the exact same original document, never two different
+worksheets, so match up the same questions between them by their content and position rather than by any
+ID (the two engines may format surrounding headings/tables/IDs differently even for identical questions).
+When only one source is present, just use it as before. When both are present, cross-reference them
+per-question: if Source 1's version of a question is incomplete per the CRITICAL rule above (cut off, no
+blank marker) but Source 2's version of that same question is complete, use Source 2's complete version
+instead of omitting the question. Prefer Source 1 (Mathpix) whenever a question involves math notation,
+since it converts equations/fractions/exponents to LaTeX and Source 2 will not. Only omit a question
+entirely if BOTH sources are incomplete for it — that means the limitation is in the source document
+itself, not a one-off OCR miss, and the CRITICAL rule still applies: never fabricate a completion for it.
 
 When a question consists of a quoted/indented excerpt followed by a separate instructional question line
 (e.g. a block-quoted passage followed by "As used in the text, what does the word ... most nearly
@@ -342,18 +455,38 @@ def _extract_questions_chunk(client: OpenAI, ocr_text: str, depth: int = 0) -> t
     return questions, subject_guess
 
 
-def extract_questions(ocr_text: str) -> ExtractionResult:
+def _combine_ocr_sources(primary_ocr_text: str, secondary_ocr_text: str | None) -> str:
+    """Builds the extraction LLM's input from one or two OCR readings. With
+    only Mathpix's text (secondary unset/unavailable), behavior is unchanged
+    from before this cross-check existed. See EXTRACTION_SYSTEM_PROMPT's
+    dual-source paragraph for how the model is told to reconcile the two."""
+    if not secondary_ocr_text:
+        return primary_ocr_text
+    return (
+        "=== OCR SOURCE 1 (Mathpix — math-aware, converts equations/fractions/exponents to LaTeX) ===\n"
+        f"{primary_ocr_text}\n\n"
+        "=== OCR SOURCE 2 (Google Document AI — general-purpose OCR, independent reading "
+        "of the same document) ===\n"
+        f"{secondary_ocr_text}"
+    )
+
+
+def extract_questions(ocr_text: str, secondary_ocr_text: str | None = None) -> ExtractionResult:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    questions, subject_guess = _extract_questions_chunk(client, ocr_text)
+    combined_input = _combine_ocr_sources(ocr_text, secondary_ocr_text)
+    questions, subject_guess = _extract_questions_chunk(client, combined_input)
+    # Pdf.ocr_text (grounds the AI tutor) stays Mathpix-only — richer isn't
+    # obviously better there, and this keeps that path's behavior unchanged.
     return ExtractionResult(subject_guess=subject_guess, questions=questions, ocr_text=ocr_text)
 
 
 def run_pipeline(pdf_bytes: bytes, filename: str) -> ExtractionResult:
     """Entry point called by the background job triggered from pdfs.upload_pdf."""
     ocr_text = ocr_pdf(pdf_bytes, filename)
-    result = extract_questions(ocr_text)
+    secondary_ocr_text = document_ai_ocr(pdf_bytes)
+    result = extract_questions(ocr_text, secondary_ocr_text)
     result.images = _download_images(_extract_image_urls(ocr_text))
     return result
