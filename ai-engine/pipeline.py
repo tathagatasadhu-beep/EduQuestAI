@@ -206,15 +206,21 @@ If the original text contains a fill-in-the-blank blank (usually shown as a run 
 question), preserve it verbatim as a run of underscores in "prompt_text" — never replace it with an
 ellipsis, and never simply omit it while continuing the sentence around it.
 
-CRITICAL — never fabricate content to patch a broken source: some OCR input is itself incomplete for a
-given question (the passage cuts off mid-sentence with no fill-in-the-blank marker at all, or otherwise
-doesn't contain enough to actually pose the question). When that happens, do NOT invent, guess, paraphrase,
-or reconstruct a plausible-sounding replacement sentence or ending — even one that would fit the answer
-choices grammatically, and even though this contradicts the "transcribe completely" instruction above; an
-incomplete source overrides it. Writing a made-up sentence is worse than an ellipsis, because it looks
-legitimate but teaches the student something that was never in the source. Instead, simply OMIT that
-question from the "questions" array entirely and move on to the next one. It is always better to return
-fewer, fully genuine questions than to fill gaps with fabricated text.
+CRITICAL — never fabricate content to patch a broken source, and never present a broken question either:
+some OCR input is itself incomplete for a given question (the passage cuts off mid-sentence with no
+fill-in-the-blank marker at all, or otherwise doesn't contain enough to actually pose the question). A
+reliable tell: a "which choice completes the text" style question whose passage has NO run of underscores
+(or "$\\_\\_\\_\\_$") anywhere in it is always incomplete — a real one always has the blank somewhere in the
+passage, so its absence means the source got cut off before reaching it, not that this question simply has
+no blank. When you detect this, do NOT invent, guess, paraphrase, or reconstruct a plausible-sounding
+replacement sentence or ending — even one that would fit the answer choices grammatically, and even though
+this contradicts the "transcribe completely" instruction above; an incomplete source overrides it. And do
+NOT include the question as-is with its truncated passage either — a student cannot answer a fill-in-the-
+blank question whose blank was never shown. Writing a made-up sentence is worse than an ellipsis, because
+it looks legitimate but teaches the student something that was never in the source; showing the truncated
+version is *also* wrong, because it presents an unanswerable question as a normal one. Instead, simply OMIT
+that question from the "questions" array entirely and move on to the next one. It is always better to
+return fewer, fully genuine, fully answerable questions than to include a broken one in any form.
 
 When a question consists of a quoted/indented excerpt followed by a separate instructional question line
 (e.g. a block-quoted passage followed by "As used in the text, what does the word ... most nearly
