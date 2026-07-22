@@ -443,7 +443,28 @@ async def _process_pdf(pdf_id: UUID) -> None:
                 except Exception:
                     return None
 
-            for sort_order, eq in enumerate(result.questions):
+            # Topics accumulate questions across multiple uploads (matched/reused
+            # by name, or a parent-picked fixed topic) — sort_order has to keep
+            # counting up from whatever's already in that topic, not restart at 0
+            # for every upload, or two worksheets sharing a topic end up with
+            # colliding sort_order values whose combined order interleaves them
+            # (looks like random shuffling even though each worksheet's own
+            # questions are individually in order).
+            next_sort_order: dict[uuid.UUID, int] = {}
+
+            async def _next_sort_order(topic_id: uuid.UUID) -> int:
+                if topic_id not in next_sort_order:
+                    existing_max = (
+                        await db.execute(
+                            select(func.max(Question.sort_order)).where(Question.topic_id == topic_id)
+                        )
+                    ).scalar_one()
+                    next_sort_order[topic_id] = (existing_max + 1) if existing_max is not None else 0
+                order = next_sort_order[topic_id]
+                next_sort_order[topic_id] += 1
+                return order
+
+            for eq in result.questions:
                 if fixed_topic is not None:
                     topic = fixed_topic
                 else:
@@ -471,7 +492,7 @@ async def _process_pdf(pdf_id: UUID) -> None:
                     question_type="multiple_choice" if len(eq.options) > 1 else "free_response",
                     image_path=image_path,
                     requires_self_assessment=eq.requires_self_assessment,
-                    sort_order=sort_order,
+                    sort_order=await _next_sort_order(topic.id),
                 )
                 db.add(question)
                 await db.flush()
