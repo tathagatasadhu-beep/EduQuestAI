@@ -36,6 +36,7 @@ optional (step 1b is skipped entirely if unset). This module makes real
 network calls; there's no offline mode.
 """
 import base64
+import difflib
 import json
 import os
 import re
@@ -417,19 +418,6 @@ unanswerable question as a normal one. Instead, simply OMIT that question from t
 entirely and move on to the next one. It is always better to return fewer, fully genuine, fully answerable
 questions than to include a broken one in any form — including a form that merely looks well-formed.
 
-The input may contain either ONE OCR reading of the worksheet, or TWO independent OCR readings clearly
-marked "=== OCR SOURCE 1 (Mathpix...) ===" and "=== OCR SOURCE 2 (Google Document AI...) ===" — when both
-are present, they are two separate OCR attempts on the exact same original document, never two different
-worksheets, so match up the same questions between them by their content and position rather than by any
-ID (the two engines may format surrounding headings/tables/IDs differently even for identical questions).
-When only one source is present, just use it as before. When both are present, cross-reference them
-per-question: if Source 1's version of a question is incomplete per the CRITICAL rule above (cut off, no
-blank marker) but Source 2's version of that same question is complete, use Source 2's complete version
-instead of omitting the question. Prefer Source 1 (Mathpix) whenever a question involves math notation,
-since it converts equations/fractions/exponents to LaTeX and Source 2 will not. Only omit a question
-entirely if BOTH sources are incomplete for it — that means the limitation is in the source document
-itself, not a one-off OCR miss, and the CRITICAL rule still applies: never fabricate a completion for it.
-
 When a question consists of a quoted/indented excerpt followed by a separate instructional question line
 (e.g. a block-quoted passage followed by "As used in the text, what does the word ... most nearly
 mean?"), put a blank line (two newline characters) between the excerpt and the instructional line in
@@ -550,22 +538,6 @@ def _extract_questions_chunk(client: OpenAI, ocr_text: str, depth: int = 0) -> t
     return questions, subject_guess
 
 
-def _combine_ocr_sources(primary_ocr_text: str, secondary_ocr_text: str | None) -> str:
-    """Builds the extraction LLM's input from one or two OCR readings. With
-    only Mathpix's text (secondary unset/unavailable), behavior is unchanged
-    from before this cross-check existed. See EXTRACTION_SYSTEM_PROMPT's
-    dual-source paragraph for how the model is told to reconcile the two."""
-    if not secondary_ocr_text:
-        return primary_ocr_text
-    return (
-        "=== OCR SOURCE 1 (Mathpix — math-aware, converts equations/fractions/exponents to LaTeX) ===\n"
-        f"{primary_ocr_text}\n\n"
-        "=== OCR SOURCE 2 (Google Document AI — general-purpose OCR, independent reading "
-        "of the same document) ===\n"
-        f"{secondary_ocr_text}"
-    )
-
-
 # Verified against a real 58-question worksheet: a single call over the full
 # ~42K-character combined (Mathpix + Document AI) input returned a clean,
 # valid, fully correct JSON response — but stopped after only 10 questions,
@@ -579,20 +551,77 @@ def _combine_ocr_sources(primary_ocr_text: str, secondary_ocr_text: str | None) 
 _PROACTIVE_CHUNK_THRESHOLD = 18000
 
 
+def _extract_one_source(client: OpenAI, text: str) -> tuple[list[ExtractedQuestion], str]:
+    """Runs extraction on a single OCR reading, proactively chunking first if
+    it's large (see _PROACTIVE_CHUNK_THRESHOLD)."""
+    if len(text) > _PROACTIVE_CHUNK_THRESHOLD:
+        left, right = _split_ocr_text(text)
+        left_questions, subject_guess = _extract_questions_chunk(client, left)
+        right_questions, _ = _extract_questions_chunk(client, right)
+        return left_questions + right_questions, subject_guess
+    return _extract_questions_chunk(client, text)
+
+
+def _question_match_key(question: ExtractedQuestion) -> tuple[str, ...]:
+    """A question's answer options are a much more reliable match key across
+    two independently-OCR'd/extracted readings of the same document than its
+    passage text — the passage is exactly what varies with OCR completeness,
+    while a multiple-choice question's options are short, fixed, and rarely
+    misread. Free-response questions (no real options) fall back to a
+    prompt_text prefix instead."""
+    if question.options and len(question.options) > 1:
+        return tuple(sorted((opt.get("text") or "").strip().lower() for opt in question.options))
+    return (question.prompt_text.strip().lower()[:50],)
+
+
+def _merge_question_lists(
+    primary: list[ExtractedQuestion], secondary: list[ExtractedQuestion]
+) -> list[ExtractedQuestion]:
+    """Merges two independently-extracted question lists (one per OCR
+    source) into one, in code rather than asking the extraction LLM to
+    reconcile both full OCR texts in a single call — confirmed via a real
+    worksheet that a single combined-input call unreliably defaults to
+    Source 1's content and silently skips questions that exist only in
+    Source 2 (e.g. a whole page one OCR engine missed), even with explicit
+    instructions to search both independently.
+
+    Uses each list's own relative order plus matching questions (by answer
+    options, see _question_match_key) as alignment anchors — the same
+    technique a text diff/merge uses via difflib.SequenceMatcher — so a
+    question present in only one source lands at roughly the right position
+    instead of being lost or dropped at the end. At a matched anchor, prefers
+    `primary` (Mathpix, which preserves math/LaTeX notation) unless
+    `secondary`'s version is substantially longer, which is a reliable
+    signal that Mathpix's own version was truncated.
+    """
+    primary_keys = [_question_match_key(q) for q in primary]
+    secondary_keys = [_question_match_key(q) for q in secondary]
+    matcher = difflib.SequenceMatcher(None, primary_keys, secondary_keys, autojunk=False)
+
+    merged: list[ExtractedQuestion] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for pi, sj in zip(range(i1, i2), range(j1, j2)):
+                p, s = primary[pi], secondary[sj]
+                merged.append(s if len(s.prompt_text) > len(p.prompt_text) * 1.2 else p)
+        else:
+            merged.extend(primary[i1:i2])
+            merged.extend(secondary[j1:j2])
+    return merged
+
+
 def extract_questions(ocr_text: str, secondary_ocr_text: str | None = None) -> ExtractionResult:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    combined_input = _combine_ocr_sources(ocr_text, secondary_ocr_text)
+    primary_questions, subject_guess = _extract_one_source(client, ocr_text)
 
-    if len(combined_input) > _PROACTIVE_CHUNK_THRESHOLD:
-        left, right = _split_ocr_text(combined_input)
-        left_questions, subject_guess = _extract_questions_chunk(client, left)
-        right_questions, _ = _extract_questions_chunk(client, right)
-        questions = left_questions + right_questions
+    if secondary_ocr_text:
+        secondary_questions, _ = _extract_one_source(client, secondary_ocr_text)
+        questions = _merge_question_lists(primary_questions, secondary_questions)
     else:
-        questions, subject_guess = _extract_questions_chunk(client, combined_input)
+        questions = primary_questions
 
     # Pdf.ocr_text (grounds the AI tutor) stays Mathpix-only — richer isn't
     # obviously better there, and this keeps that path's behavior unchanged.
