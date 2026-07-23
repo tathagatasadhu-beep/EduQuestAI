@@ -69,7 +69,11 @@ MATHPIX_POLL_TIMEOUT_SECONDS = 180
 # access tokens on demand via google-auth.
 GOOGLE_APPLICATION_CREDENTIALS_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
 GOOGLE_DOCUMENT_AI_PROJECT_ID = os.environ.get("GOOGLE_DOCUMENT_AI_PROJECT_ID", "")
-GOOGLE_DOCUMENT_AI_LOCATION = os.environ.get("GOOGLE_DOCUMENT_AI_LOCATION", "")
+# Google's resource path is case-sensitive and only accepts lowercase region
+# codes ("us", not "US") — confirmed live: uppercase gets a 400
+# INVALID_ARGUMENT even though it looks like a harmless typo. Normalizing
+# here means however it's typed into Render's dashboard, it still works.
+GOOGLE_DOCUMENT_AI_LOCATION = os.environ.get("GOOGLE_DOCUMENT_AI_LOCATION", "").lower()
 GOOGLE_DOCUMENT_AI_PROCESSOR_ID = os.environ.get("GOOGLE_DOCUMENT_AI_PROCESSOR_ID", "")
 _DOCUMENT_AI_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
