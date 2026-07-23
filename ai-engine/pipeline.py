@@ -150,6 +150,88 @@ def ocr_pdf(pdf_bytes: bytes, filename: str) -> str:
         return md_resp.text
 
 
+# Tuned against a real worksheet where Document AI's own flattened
+# `document.text` scrambled a fill-in-the-blank sentence into the wrong
+# order (see _reconstruct_document_ai_text). Values are in normalized
+# page-fraction units (0..1), not pixels.
+_ROW_TOLERANCE = 0.006  # y-difference within which two line fragments count as "the same row"
+_BLANK_GAP_THRESHOLD = 0.02  # x-gap between same-row fragments wide enough to mean "there's a blank here"
+_SIDEBAR_MAX_WIDTH = 0.12  # a line narrower than this...
+_SIDEBAR_LEFT_EDGE = 0.2  # ...and this close to the left edge...
+_SIDEBAR_RIGHT_EDGE = 0.85  # ...or this close to the right edge, is a margin/ID/answer-key column, not body text
+
+
+def _reconstruct_document_ai_text(document: dict) -> str:
+    """Rebuilds reading order from each line's bounding box instead of
+    trusting Document AI's own flattened `document.text`.
+
+    Confirmed against a real worksheet (each question is one embedded raster
+    image) that the flat text scrambles fill-in-the-blank sentences: a line
+    that wraps around the blank's underscore graphic gets detected as a
+    separate text fragment positioned further right, and Document AI's
+    default ordering doesn't always place it back where it belongs. Sorting
+    by vertical position (grouping fragments on the same visual row, then
+    ordering left-to-right within a row) restores the original order.
+
+    As a bonus, this also recovers the blank itself: the underscore graphic
+    isn't text, so it appears as a horizontal gap between two fragments on
+    the same row — wide enough to insert a "______" placeholder, versus
+    normal word spacing. Known imperfection: a handful of blanks still get
+    missed where the gap didn't split into two separate line fragments to
+    begin with, and stylistically-wide-spaced poem/verse lines can trigger a
+    false-positive blank — both are treated as acceptable, since the
+    extraction LLM's existing "omit if incomplete" rule only fires on
+    genuinely broken output, not a slightly-imperfect-but-complete one.
+    """
+    full_text = document.get("text", "")
+
+    def get_text(text_anchor: dict) -> str:
+        segments = (text_anchor or {}).get("textSegments") or []
+        return "".join(full_text[int(seg.get("startIndex", 0)) : int(seg.get("endIndex", 0))] for seg in segments)
+
+    def bbox(layout: dict) -> tuple[float, float, float]:
+        vertices = layout.get("boundingPoly", {}).get("normalizedVertices", [])
+        ys = [v.get("y", 0) for v in vertices]
+        xs = [v.get("x", 0) for v in vertices]
+        return (min(ys, default=0), min(xs, default=0), max(xs, default=0))
+
+    page_texts = []
+    for page in document.get("pages", []):
+        fragments = []
+        for line in page.get("lines", []):
+            top, left, right = bbox(line["layout"])
+            text = get_text(line["layout"].get("textAnchor")).rstrip("\n")
+            if not text.strip():
+                continue
+            is_sidebar = (right - left) < _SIDEBAR_MAX_WIDTH and (
+                left < _SIDEBAR_LEFT_EDGE * 0.9 or left > _SIDEBAR_RIGHT_EDGE
+            )
+            if is_sidebar:
+                continue
+            fragments.append({"top": top, "left": left, "right": right, "text": text})
+
+        fragments.sort(key=lambda f: f["top"])
+        rows: list[list[dict]] = []
+        for frag in fragments:
+            if rows and abs(rows[-1][-1]["top"] - frag["top"]) <= _ROW_TOLERANCE:
+                rows[-1].append(frag)
+            else:
+                rows.append([frag])
+
+        row_texts = []
+        for row in rows:
+            row.sort(key=lambda f: f["left"])
+            pieces = [row[0]["text"]]
+            for prev, cur in zip(row, row[1:]):
+                gap = cur["left"] - prev["right"]
+                pieces.append(" ______ " if gap > _BLANK_GAP_THRESHOLD else " ")
+                pieces.append(cur["text"])
+            row_texts.append("".join(pieces))
+        page_texts.append("\n".join(row_texts))
+
+    return "\n\n".join(page_texts)
+
+
 def document_ai_ocr(pdf_bytes: bytes) -> str | None:
     """Runs Google Document AI's general-purpose OCR processor on the same
     PDF, as a cheap cross-check alongside Mathpix. Confirmed against real
@@ -204,7 +286,10 @@ def document_ai_ocr(pdf_bytes: bytes) -> str | None:
                 json=body,
             )
             resp.raise_for_status()
-            return resp.json().get("document", {}).get("text") or None
+            document = resp.json().get("document")
+            if not document:
+                return None
+            return _reconstruct_document_ai_text(document) or None
     except Exception:
         return None
 
@@ -481,13 +566,34 @@ def _combine_ocr_sources(primary_ocr_text: str, secondary_ocr_text: str | None) 
     )
 
 
+# Verified against a real 58-question worksheet: a single call over the full
+# ~42K-character combined (Mathpix + Document AI) input returned a clean,
+# valid, fully correct JSON response — but stopped after only 10 questions,
+# silently giving up on the rest rather than hitting the output-token limit
+# (finish_reason wasn't "length", so _extract_questions_chunk's reactive
+# split never triggered). Splitting the same input in half up front and
+# processing each half separately recovered 54 of the 58 questions instead.
+# Proactively chunking large inputs — rather than waiting for a failure
+# signal that doesn't reliably fire — avoids relying on the model to
+# self-regulate how much of a big input it's willing to fully process.
+_PROACTIVE_CHUNK_THRESHOLD = 18000
+
+
 def extract_questions(ocr_text: str, secondary_ocr_text: str | None = None) -> ExtractionResult:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
     combined_input = _combine_ocr_sources(ocr_text, secondary_ocr_text)
-    questions, subject_guess = _extract_questions_chunk(client, combined_input)
+
+    if len(combined_input) > _PROACTIVE_CHUNK_THRESHOLD:
+        left, right = _split_ocr_text(combined_input)
+        left_questions, subject_guess = _extract_questions_chunk(client, left)
+        right_questions, _ = _extract_questions_chunk(client, right)
+        questions = left_questions + right_questions
+    else:
+        questions, subject_guess = _extract_questions_chunk(client, combined_input)
+
     # Pdf.ocr_text (grounds the AI tutor) stays Mathpix-only — richer isn't
     # obviously better there, and this keeps that path's behavior unchanged.
     return ExtractionResult(subject_guess=subject_guess, questions=questions, ocr_text=ocr_text)
