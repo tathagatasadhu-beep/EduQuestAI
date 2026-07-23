@@ -314,13 +314,19 @@ reliable tell: a "which choice completes the text" style question whose passage 
 passage, so its absence means the source got cut off before reaching it, not that this question simply has
 no blank. When you detect this, do NOT invent, guess, paraphrase, or reconstruct a plausible-sounding
 replacement sentence or ending — even one that would fit the answer choices grammatically, and even though
-this contradicts the "transcribe completely" instruction above; an incomplete source overrides it. And do
+this contradicts the "transcribe completely" instruction above; an incomplete source overrides it. This
+explicitly includes inventing your OWN blank marker and dropping it in right where the text happens to cut
+off (e.g. turning "...during his career he" into "...during his career he ______.") — that is NOT
+transcribing the source's real blank, it's fabricating one, and it is just as much a violation of this rule
+as writing a fake sentence; a run of underscores only counts as "the blank" when it is copied from that
+exact position in the source, never when you placed it there yourself to patch a cut-off passage. And do
 NOT include the question as-is with its truncated passage either — a student cannot answer a fill-in-the-
-blank question whose blank was never shown. Writing a made-up sentence is worse than an ellipsis, because
-it looks legitimate but teaches the student something that was never in the source; showing the truncated
-version is *also* wrong, because it presents an unanswerable question as a normal one. Instead, simply OMIT
-that question from the "questions" array entirely and move on to the next one. It is always better to
-return fewer, fully genuine, fully answerable questions than to include a broken one in any form.
+blank question whose blank was never shown, real or invented. Writing a made-up sentence, and inventing a
+blank marker, are both worse than an ellipsis, because they look legitimate but teach the student something
+that was never in the source; showing the truncated version is *also* wrong, because it presents an
+unanswerable question as a normal one. Instead, simply OMIT that question from the "questions" array
+entirely and move on to the next one. It is always better to return fewer, fully genuine, fully answerable
+questions than to include a broken one in any form — including a form that merely looks well-formed.
 
 The input may contain either ONE OCR reading of the worksheet, or TWO independent OCR readings clearly
 marked "=== OCR SOURCE 1 (Mathpix...) ===" and "=== OCR SOURCE 2 (Google Document AI...) ===" — when both
