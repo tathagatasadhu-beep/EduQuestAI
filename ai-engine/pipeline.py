@@ -379,6 +379,15 @@ as plain words ("arc AC") instead of LaTeX macros like "\\overparen{AC}". Never 
 in "prompt_text" just because a clean conversion isn't obvious — always find a plain-text or Unicode way
 to express it instead.
 
+ONE EXCEPTION to "no LaTeX/no markup": if the source marks a span of text as underlined (e.g.
+"\\underline{...}" or "\\uline{...}"), that underline is meaningful, not decorative — some questions
+literally say "the claim in the underlined sentence" or "the underlined portion," and the student cannot
+answer without knowing which text that refers to. Preserve it by wrapping that exact span in "prompt_text"
+with "<u>" and "</u>" tags, e.g. "\\underline{This insightful depiction...youth.}" becomes
+"<u>This insightful depiction...youth.</u>" — same words, underline markers instead of the LaTeX command.
+Never strip an underline down to plain unmarked text the way you would an ordinary LaTeX symbol, and never
+add "<u></u>" around text that isn't actually underlined in the source.
+
 "prompt_text" must NEVER include the lettered answer choices (A/B/C/D or similar) as part of its own text,
 even though they immediately follow the stem in the source — they belong ONLY in the separate "options"
 field. Stop writing "prompt_text" right after the instructional stem line; do not continue into "A. ...",

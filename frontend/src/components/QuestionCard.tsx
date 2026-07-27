@@ -11,16 +11,47 @@ import TutorChat from "@/components/TutorChat";
 // it as a visible blank line instead of tiny/cramped underscore characters.
 const BLANK_PATTERN = /_{3,}/g;
 
-function renderPromptText(text: string) {
+// Some evidence-based questions refer back to "the underlined sentence" —
+// the extraction step marks that span with <u></u> since it's meaningful,
+// not decorative, and the question is unanswerable without knowing which
+// text it points to.
+const UNDERLINE_PATTERN = /<u>([\s\S]*?)<\/u>/g;
+
+function renderBlanks(text: string, keyPrefix: string) {
   const parts = text.split(BLANK_PATTERN);
   return parts.map((part, i) => (
-    <Fragment key={i}>
+    <Fragment key={`${keyPrefix}-${i}`}>
       {part}
       {i < parts.length - 1 && (
         <span className="mx-1 inline-block w-16 border-b-[3px] border-zinc-500 align-middle" aria-hidden="true" />
       )}
     </Fragment>
   ));
+}
+
+function renderPromptText(text: string) {
+  const segments: { text: string; underline: boolean }[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(UNDERLINE_PATTERN)) {
+    if (match.index! > lastIndex) {
+      segments.push({ text: text.slice(lastIndex, match.index), underline: false });
+    }
+    segments.push({ text: match[1], underline: true });
+    lastIndex = match.index! + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ text: text.slice(lastIndex), underline: false });
+  }
+
+  return segments.map((segment, i) =>
+    segment.underline ? (
+      <span key={i} className="underline decoration-2 underline-offset-2">
+        {renderBlanks(segment.text, `u${i}`)}
+      </span>
+    ) : (
+      <Fragment key={i}>{renderBlanks(segment.text, `p${i}`)}</Fragment>
+    ),
+  );
 }
 
 export default function QuestionCard({
