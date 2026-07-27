@@ -384,6 +384,17 @@ even though they immediately follow the stem in the source — they belong ONLY 
 field. Stop writing "prompt_text" right after the instructional stem line; do not continue into "A. ...",
 "B. ...", etc.
 
+A known OCR artifact: when an option's text wraps across two lines, the OCR sometimes places that
+option's letter in the MIDDLE of the sentence instead of at the start — e.g. "Citizen scientists have
+made more observations of the whales migrating to their breeding grounds than of the whales C. returning
+to their feeding grounds" is really option C reading "Citizen scientists have made more observations of
+the whales migrating to their breeding grounds than of the whales returning to their feeding grounds" —
+the "C." belongs at the very front, not embedded mid-sentence. Recognize this pattern (a single capital
+letter followed by a period appearing after only part of a sentence, with the sentence continuing
+naturally on both sides of it) and reconstruct the option as one continuous sentence with its letter
+restored to the front — never treat the misplaced letter as marking a new question boundary, and never
+let text from one option leak into a completely different, unrelated question because of it.
+
 MANDATORY TABLE HANDLING: scan the source for any block of lines built from "|" characters, e.g.:
 | Species | Mean bill surface area (cm²) | Mean max temperature (°C) |
 | Brown thrasher | 1.86 | 30.40 |
@@ -532,6 +543,14 @@ _BARE_STEM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A lettered option (e.g. "A. Citizen scientists have observed...") right after a
+# boundary, with no stem in the same chunk to attach it to, is just as broken as a
+# bare stem with no passage — confirmed on a real worksheet that it produces WORSE
+# damage: the model glued the orphaned tail option onto the next unrelated question
+# to make something parseable, contaminating a completely different question's text
+# rather than just mishandling the one the options belonged to.
+_BARE_OPTION_PATTERN = re.compile(r"^[A-D][.\)]\s")
+
 
 def _split_ocr_text(text: str) -> tuple[str, str]:
     """Splits OCR markdown roughly in half at the nearest paragraph boundary
@@ -545,7 +564,7 @@ def _split_ocr_text(text: str) -> tuple[str, str]:
 
     def _is_safe_boundary(pos: int) -> bool:
         after = body[pos:].lstrip("\n")
-        if _BARE_STEM_PATTERN.match(after):
+        if _BARE_STEM_PATTERN.match(after) or _BARE_OPTION_PATTERN.match(after):
             return False
         # A markdown table ("| ... |" rows) right before the boundary belongs
         # to whichever question follows it — splitting here would separate a
