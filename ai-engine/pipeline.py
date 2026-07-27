@@ -379,9 +379,37 @@ as plain words ("arc AC") instead of LaTeX macros like "\\overparen{AC}". Never 
 in "prompt_text" just because a clean conversion isn't obvious — always find a plain-text or Unicode way
 to express it instead.
 
+"prompt_text" must NEVER include the lettered answer choices (A/B/C/D or similar) as part of its own text,
+even though they immediately follow the stem in the source — they belong ONLY in the separate "options"
+field. Stop writing "prompt_text" right after the instructional stem line; do not continue into "A. ...",
+"B. ...", etc.
+
+MANDATORY TABLE HANDLING: scan the source for any block of lines built from "|" characters, e.g.:
+| Species | Mean bill surface area (cm²) | Mean max temperature (°C) |
+| Brown thrasher | 1.86 | 30.40 |
+| Bendire's thrasher | 1.98 | 36.57 |
+That is a data table, full stop — never treat it as formatting noise to clean away, and never let its
+presence push you toward summarizing or paraphrasing the surrounding question instead of transcribing it.
+Whichever question immediately follows a table (usually one that says "using data from the table" or
+similar) is UNANSWERABLE without every value in it, so you must convert the ENTIRE table into
+"prompt_text" as a plain-text listing, one line per data row, combining that row's label with each column
+header and its value — for the example above: "Brown thrasher — mean bill surface area: 1.86 cm², mean
+max temperature: 30.40°C" then a new line "Bendire's thrasher — mean bill surface area: 1.98 cm², mean max
+temperature: 36.57°C", continuing for every remaining row (do not stop after one or two rows — every row in
+the table must get its own line). Place this listing in "prompt_text" right after the passage and before
+the instructional stem. Dropping the table, describing it only in general terms ("a table showing bird
+data"), or summarizing just some of its rows are all equally forbidden — the CRITICAL rule below treats a
+table-dependent question with no table in "prompt_text" as exactly as broken as a fill-in-the-blank
+question with no blank.
+
 Transcribe every passage and instructional line COMPLETELY AND VERBATIM, copying the source's actual words
 in order — never summarize, shorten, paraphrase, or rewrite it in different words to save space or to make
 it read more smoothly, no matter how long the passage is or how many questions the worksheet has. This
+applies even when the answer options are themselves long and individually restate scenario details from
+the passage (common in evidence-based reasoning questions, e.g. "Which finding would support the
+researchers' hypothesis?") — that overlap does NOT make the passage redundant or droppable. Always include
+the full original passage before the stem regardless of how much the options happen to repeat; the student
+needs the actual passage to answer, not just whatever can be inferred from the option text. This
 especially includes a trailing instructional line specific to that question (e.g. "Which choice completes
 the text with the most logical and precise word or phrase?" or "As used in the text, what does the word
 \"X\" most nearly mean?") — copy that question's own instructional line in full WHEN THE SOURCE ACTUALLY
@@ -417,6 +445,17 @@ that was never in the source; showing the truncated version is *also* wrong, bec
 unanswerable question as a normal one. Instead, simply OMIT that question from the "questions" array
 entirely and move on to the next one. It is always better to return fewer, fully genuine, fully answerable
 questions than to include a broken one in any form — including a form that merely looks well-formed.
+
+The same principle applies to evidence-based reasoning questions, which have no blank marker to check but
+have their own reliable tell: a stem like "Which choice/finding/statement most directly supports/
+illustrates/uses..." always refers back to a passage describing a study, claim, or scenario that appears
+immediately before it in the source — if you find such a stem with no supporting passage right before it
+(just options from a previous question, or nothing), the passage was lost when the input was split up, not
+genuinely absent. Do NOT compensate by restating or summarizing the missing context into the stem itself
+(e.g. turning "Which finding would support the hypothesis?" into "Which finding would support the
+hypothesis that X causes Y?" to make it read as self-contained) — that is paraphrasing forbidden content
+into existence just as much as fabricating a blank is, even though it looks like a small, harmless
+clarification. Omit the question instead, same as any other incomplete one.
 
 When a question consists of a quoted/indented excerpt followed by a separate instructional question line
 (e.g. a block-quoted passage followed by "As used in the text, what does the word ... most nearly
@@ -481,18 +520,63 @@ _ANSWER_KEY_HEADING = re.compile(r"answer\s*key", re.IGNORECASE)
 _MAX_SPLIT_DEPTH = 4
 
 
+# Stems like "Which choice completes..." / "Which finding, if true..." / "As used in
+# the text..." always follow their own passage within the same question — confirmed on
+# a real worksheet that splitting the input between them (an ordinary-looking blank
+# line, indistinguishable from a real between-questions boundary by position alone)
+# separates a question's context from its own stem+options. The model didn't recognize
+# the stem-only half as broken (it still has a full stem and options) and compensated
+# by paraphrasing the missing context into the stem instead of omitting the question.
+_BARE_STEM_PATTERN = re.compile(
+    r"^(Which choice|Which finding|Which statement|Which claim|Which quotation|As used in the text|What does|What function)",
+    re.IGNORECASE,
+)
+
+
 def _split_ocr_text(text: str) -> tuple[str, str]:
     """Splits OCR markdown roughly in half at the nearest paragraph boundary
-    (never mid-question), keeping any answer-key section attached to both
-    halves so ID-based answer matching still works after the split."""
+    that isn't a _BARE_STEM_PATTERN split point, keeping any answer-key
+    section attached to both halves so ID-based answer matching still works
+    after the split."""
     key_match = _ANSWER_KEY_HEADING.search(text)
     body, key_block = (text[: key_match.start()], text[key_match.start() :]) if key_match else (text, "")
 
     midpoint = len(body) // 2
-    boundary = body.rfind("\n\n", 0, midpoint)
-    if boundary == -1:
-        boundary = body.find("\n\n", midpoint)
-    if boundary == -1:
+
+    def _is_safe_boundary(pos: int) -> bool:
+        after = body[pos:].lstrip("\n")
+        if _BARE_STEM_PATTERN.match(after):
+            return False
+        # A markdown table ("| ... |" rows) right before the boundary belongs
+        # to whichever question follows it — splitting here would separate a
+        # table from the question that depends on it, the same class of bug
+        # as splitting a passage from its own stem.
+        last_line = body[:pos].rstrip("\n").rsplit("\n", 1)[-1]
+        return "|" not in last_line
+
+    boundary = None
+    search_end = midpoint
+    while True:
+        candidate = body.rfind("\n\n", 0, search_end)
+        if candidate == -1:
+            break
+        if _is_safe_boundary(candidate):
+            boundary = candidate
+            break
+        search_end = candidate
+
+    if boundary is None:
+        search_start = midpoint
+        while True:
+            candidate = body.find("\n\n", search_start)
+            if candidate == -1:
+                break
+            if _is_safe_boundary(candidate):
+                boundary = candidate
+                break
+            search_start = candidate + 2
+
+    if boundary is None:
         boundary = midpoint
 
     left, right = body[:boundary], body[boundary:]
@@ -538,28 +622,29 @@ def _extract_questions_chunk(client: OpenAI, ocr_text: str, depth: int = 0) -> t
     return questions, subject_guess
 
 
-# Verified against a real 58-question worksheet: a single call over the full
-# ~42K-character combined (Mathpix + Document AI) input returned a clean,
-# valid, fully correct JSON response — but stopped after only 10 questions,
-# silently giving up on the rest rather than hitting the output-token limit
-# (finish_reason wasn't "length", so _extract_questions_chunk's reactive
-# split never triggered). Splitting the same input in half up front and
-# processing each half separately recovered 54 of the 58 questions instead.
-# Proactively chunking large inputs — rather than waiting for a failure
-# signal that doesn't reliably fire — avoids relying on the model to
-# self-regulate how much of a big input it's willing to fully process.
-_PROACTIVE_CHUNK_THRESHOLD = 18000
+# Verified twice against real worksheets, at two different sizes, that a call over a
+# large input returns a clean, valid JSON response but quietly stops after only ~10
+# questions rather than hitting the output-token limit (finish_reason isn't "length",
+# so _extract_questions_chunk's reactive split never triggers) — first at ~42K
+# characters (dual-source combined), then again at ~24K (single-source, just a
+# many-question chunk). One split into two ~24K halves wasn't small enough on its own.
+# Splitting recursively — halving repeatedly until every leaf chunk is under this
+# threshold, rather than only once — avoids relying on the model to self-regulate how
+# much of a big input it's willing to fully process, regardless of how large the
+# original document is.
+_PROACTIVE_CHUNK_THRESHOLD = 12000
 
 
 def _extract_one_source(client: OpenAI, text: str) -> tuple[list[ExtractedQuestion], str]:
-    """Runs extraction on a single OCR reading, proactively chunking first if
-    it's large (see _PROACTIVE_CHUNK_THRESHOLD)."""
-    if len(text) > _PROACTIVE_CHUNK_THRESHOLD:
-        left, right = _split_ocr_text(text)
-        left_questions, subject_guess = _extract_questions_chunk(client, left)
-        right_questions, _ = _extract_questions_chunk(client, right)
-        return left_questions + right_questions, subject_guess
-    return _extract_questions_chunk(client, text)
+    """Runs extraction on a single OCR reading, recursively halving it first
+    if it's large (see _PROACTIVE_CHUNK_THRESHOLD) so no single call ever has
+    to process more than one reasonably-sized chunk's worth of questions."""
+    if len(text) <= _PROACTIVE_CHUNK_THRESHOLD:
+        return _extract_questions_chunk(client, text)
+    left, right = _split_ocr_text(text)
+    left_questions, subject_guess = _extract_one_source(client, left)
+    right_questions, _ = _extract_one_source(client, right)
+    return left_questions + right_questions, subject_guess
 
 
 def _question_match_key(question: ExtractedQuestion) -> tuple[str, ...]:
