@@ -411,16 +411,20 @@ MANDATORY TABLE HANDLING: scan the source for any block of lines built from "|" 
 That is a data table, full stop — never treat it as formatting noise to clean away, and never let its
 presence push you toward summarizing or paraphrasing the surrounding question instead of transcribing it.
 Whichever question immediately follows a table (usually one that says "using data from the table" or
-similar) is UNANSWERABLE without every value in it, so you must convert the ENTIRE table into
-"prompt_text" as a plain-text listing, one line per data row, combining that row's label with each column
-header and its value — for the example above: "Brown thrasher — mean bill surface area: 1.86 cm², mean
-max temperature: 30.40°C" then a new line "Bendire's thrasher — mean bill surface area: 1.98 cm², mean max
-temperature: 36.57°C", continuing for every remaining row (do not stop after one or two rows — every row in
-the table must get its own line). Place this listing in "prompt_text" right after the passage and before
-the instructional stem. Dropping the table, describing it only in general terms ("a table showing bird
-data"), or summarizing just some of its rows are all equally forbidden — the CRITICAL rule below treats a
-table-dependent question with no table in "prompt_text" as exactly as broken as a fill-in-the-blank
-question with no blank.
+similar) is UNANSWERABLE without every value in it. This is the ONE OTHER EXCEPTION (besides "<u></u>"
+above) to "no markdown in prompt_text" — preserve the ENTIRE table as an actual markdown table, wrapped in
+"<table>" and "</table>" tags, e.g.:
+<table>
+| Species | Mean bill surface area (cm²) | Mean max temperature (°C) |
+| Brown thrasher | 1.86 | 30.40 |
+| Bendire's thrasher | 1.98 | 36.57 |
+</table>
+— same rows and columns as the source, including the header row, every data row (do not stop after one or
+two — every row must appear), and the same column headers with their units. Place it in "prompt_text"
+right after the passage and before the instructional stem. Do NOT flatten it into prose sentences, and do
+NOT drop it, describe it only in general terms ("a table showing bird data"), or include only some of its
+rows — the CRITICAL rule below treats a table-dependent question with no table in "prompt_text" as exactly
+as broken as a fill-in-the-blank question with no blank.
 
 Transcribe every passage and instructional line COMPLETELY AND VERBATIM, copying the source's actual words
 in order — never summarize, shorten, paraphrase, or rewrite it in different words to save space or to make

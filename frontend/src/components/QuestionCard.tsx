@@ -17,6 +17,13 @@ const BLANK_PATTERN = /_{3,}/g;
 // text it points to.
 const UNDERLINE_PATTERN = /<u>([\s\S]*?)<\/u>/g;
 
+// Some evidence-based questions depend on a data table (e.g. "using data
+// from the table") — the extraction step preserves it as a real markdown
+// table wrapped in <table></table> instead of flattening it into prose,
+// so it can be rendered as an actual table rather than run-on sentences.
+const TABLE_BLOCK_PATTERN = /<table>\n?([\s\S]*?)\n?<\/table>/g;
+const TABLE_SEPARATOR_ROW = /^:?-+:?$/;
+
 function renderBlanks(text: string, keyPrefix: string) {
   const parts = text.split(BLANK_PATTERN);
   return parts.map((part, i) => (
@@ -29,7 +36,7 @@ function renderBlanks(text: string, keyPrefix: string) {
   ));
 }
 
-function renderPromptText(text: string) {
+function renderInlineText(text: string, keyPrefix: string) {
   const segments: { text: string; underline: boolean }[] = [];
   let lastIndex = 0;
   for (const match of text.matchAll(UNDERLINE_PATTERN)) {
@@ -45,11 +52,76 @@ function renderPromptText(text: string) {
 
   return segments.map((segment, i) =>
     segment.underline ? (
-      <span key={i} className="underline decoration-2 underline-offset-2">
-        {renderBlanks(segment.text, `u${i}`)}
+      <span key={`${keyPrefix}-u${i}`} className="underline decoration-2 underline-offset-2">
+        {renderBlanks(segment.text, `${keyPrefix}-u${i}`)}
       </span>
     ) : (
-      <Fragment key={i}>{renderBlanks(segment.text, `p${i}`)}</Fragment>
+      <Fragment key={`${keyPrefix}-p${i}`}>{renderBlanks(segment.text, `${keyPrefix}-p${i}`)}</Fragment>
+    ),
+  );
+}
+
+function parseMarkdownTable(block: string): string[][] {
+  return block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()))
+    .filter((cells) => !cells.every((cell) => TABLE_SEPARATOR_ROW.test(cell)));
+}
+
+function DataTable({ rows }: { rows: string[][] }) {
+  if (rows.length === 0) return null;
+  const [header, ...body] = rows;
+  return (
+    <div className="mb-5 overflow-x-auto rounded-xl ring-1 ring-sky-100">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="bg-sky-50">
+            {header.map((cell, i) => (
+              <th key={i} className="border-b border-sky-100 px-3 py-2 text-left font-semibold text-zinc-700">
+                {cell}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 1 ? "bg-zinc-50" : undefined}>
+              {row.map((cell, ci) => (
+                <td key={ci} className="border-b border-zinc-100 px-3 py-2 text-zinc-800">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderPromptText(text: string) {
+  const blocks: { table: boolean; content: string }[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(TABLE_BLOCK_PATTERN)) {
+    if (match.index! > lastIndex) {
+      blocks.push({ table: false, content: text.slice(lastIndex, match.index) });
+    }
+    blocks.push({ table: true, content: match[1] });
+    lastIndex = match.index! + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    blocks.push({ table: false, content: text.slice(lastIndex) });
+  }
+
+  return blocks.map((block, i) =>
+    block.table ? (
+      <DataTable key={i} rows={parseMarkdownTable(block.content)} />
+    ) : (
+      <p key={i} className="mb-5 whitespace-pre-wrap text-lg font-semibold text-zinc-800">
+        {renderInlineText(block.content, `b${i}`)}
+      </p>
     ),
   );
 }
@@ -158,7 +230,7 @@ export default function QuestionCard({
         />
       )}
 
-      <p className="mb-5 whitespace-pre-wrap text-lg font-semibold text-zinc-800">{renderPromptText(question.prompt_text)}</p>
+      {renderPromptText(question.prompt_text)}
 
       {isMultipleChoice ? (
         <div className="flex flex-col gap-2">
