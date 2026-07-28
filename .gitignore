@@ -20,6 +20,7 @@ out/
 backend/regression/fixtures/*.md
 backend/regression/fixtures/*.txt
 backend/regression/fixtures/*.pdf
+backend/regression/.cache/
 
 # OS
 .DS_Store
