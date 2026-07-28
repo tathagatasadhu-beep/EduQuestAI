@@ -1,0 +1,16 @@
+[
+  {
+    "name": "command_of_evidence_2",
+    "mathpix_file": "coe_mathpix.md",
+    "docai_file": "coe_docai.txt",
+    "expected_question_count": 43,
+    "expects_table": true
+  },
+  {
+    "name": "words_in_context_1",
+    "mathpix_file": "wic_mathpix.md",
+    "docai_file": "wic_docai.txt",
+    "expected_question_count": 58,
+    "expects_table": false
+  }
+]

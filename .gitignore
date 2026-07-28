@@ -14,5 +14,12 @@ out/
 .env
 .env.local
 
+# Regression fixtures cache real worksheets' OCR'd text (copyrighted
+# third-party exam content, plus large) — never committed, see
+# backend/regression/README.md
+backend/regression/fixtures/*.md
+backend/regression/fixtures/*.txt
+backend/regression/fixtures/*.pdf
+
 # OS
 .DS_Store

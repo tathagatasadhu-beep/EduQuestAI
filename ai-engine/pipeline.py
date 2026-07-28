@@ -37,6 +37,7 @@ network calls; there's no offline mode.
 """
 import base64
 import difflib
+import io
 import json
 import os
 import re
@@ -47,6 +48,7 @@ import httpx
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import service_account
 from openai import OpenAI
+from pypdf import PdfReader, PdfWriter
 
 MATHPIX_APP_ID = os.environ.get("MATHPIX_APP_ID", "")
 MATHPIX_APP_KEY = os.environ.get("MATHPIX_APP_KEY", "")
@@ -78,11 +80,16 @@ GOOGLE_DOCUMENT_AI_LOCATION = os.environ.get("GOOGLE_DOCUMENT_AI_LOCATION", "").
 GOOGLE_DOCUMENT_AI_PROCESSOR_ID = os.environ.get("GOOGLE_DOCUMENT_AI_PROCESSOR_ID", "")
 _DOCUMENT_AI_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
-# The synchronous `:process` endpoint used here caps out around 15 pages —
-# longer documents need Document AI's async batchProcess (writing to GCS
-# instead of getting an inline response), which this integration doesn't
-# implement. Worksheets over the limit just skip the cross-check pass
-# (non-fatal — see document_ai_ocr()), same as any other best-effort step.
+# The synchronous `:process` endpoint used here caps out around 15 pages.
+# Rather than implement Document AI's async batchProcess (which needs a GCS
+# bucket for input/output instead of an inline response — real extra
+# infrastructure), documents over the limit are split into <= 15-page PDF
+# chunks locally (see _split_pdf_into_chunks()) and each chunk is sent through
+# the same sync endpoint, then the reconstructed text is concatenated in page
+# order. Confirmed necessary against a real 19-page SAT worksheet where 2+
+# entire pages were silently missing from Mathpix's own OCR with no
+# cross-check available at all, because the whole document exceeded this
+# limit before a single page of it got cross-checked.
 DOCUMENT_AI_SYNC_PAGE_LIMIT = 15
 
 # Matches both markdown image syntax and Mathpix's LaTeX figure syntax, e.g.:
@@ -233,38 +240,27 @@ def _reconstruct_document_ai_text(document: dict) -> str:
     return "\n\n".join(page_texts)
 
 
-def document_ai_ocr(pdf_bytes: bytes) -> str | None:
-    """Runs Google Document AI's general-purpose OCR processor on the same
-    PDF, as a cheap cross-check alongside Mathpix. Confirmed against real
-    production data that Mathpix mis-crops some multi-line question raster
-    images, consistently losing the tail of the sentence on retries of the
-    identical file — a second, independent OCR reading lets the extraction
-    LLM tell "the source genuinely ends here" apart from "Mathpix specifically
-    missed this part," instead of relying on Mathpix alone.
+def _split_pdf_into_chunks(pdf_bytes: bytes, max_pages: int) -> list[bytes]:
+    """Splits a PDF into consecutive chunks of at most `max_pages` pages each,
+    as separate in-memory PDF byte strings, preserving page order. Used to fit
+    documents over Document AI's sync-endpoint page limit through that same
+    endpoint (one call per chunk) instead of needing the async batchProcess
+    API's GCS-based input/output."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    chunks: list[bytes] = []
+    for start in range(0, len(reader.pages), max_pages):
+        writer = PdfWriter()
+        for page in reader.pages[start : start + max_pages]:
+            writer.add_page(page)
+        buf = io.BytesIO()
+        writer.write(buf)
+        chunks.append(buf.getvalue())
+    return chunks
 
-    Returns None (skipped, not an error) if Document AI isn't configured, the
-    synchronous `:process` endpoint's ~15-page limit is exceeded, or the call
-    fails for any other reason (auth, network, quota) — this is a best-effort
-    cross-check, not the primary OCR source, so any failure here just means
-    the pipeline falls back to Mathpix alone, same as before this existed.
-    """
-    if not (
-        GOOGLE_APPLICATION_CREDENTIALS_JSON
-        and GOOGLE_DOCUMENT_AI_PROJECT_ID
-        and GOOGLE_DOCUMENT_AI_LOCATION
-        and GOOGLE_DOCUMENT_AI_PROCESSOR_ID
-    ):
-        return None
 
-    try:
-        credentials_info = json.loads(GOOGLE_APPLICATION_CREDENTIALS_JSON)
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_info, scopes=_DOCUMENT_AI_SCOPES
-        )
-        credentials.refresh(GoogleAuthRequest())
-    except Exception:
-        return None
-
+def _document_ai_process_chunk(pdf_bytes: bytes, credentials) -> str | None:
+    """Sends one <=15-page PDF chunk through Document AI's sync `:process`
+    endpoint and returns its reconstructed text, or None on any failure."""
     url = (
         f"https://{GOOGLE_DOCUMENT_AI_LOCATION}-documentai.googleapis.com/v1/"
         f"projects/{GOOGLE_DOCUMENT_AI_PROJECT_ID}/locations/{GOOGLE_DOCUMENT_AI_LOCATION}/"
@@ -293,6 +289,60 @@ def document_ai_ocr(pdf_bytes: bytes) -> str | None:
             return _reconstruct_document_ai_text(document) or None
     except Exception:
         return None
+
+
+def document_ai_ocr(pdf_bytes: bytes) -> str | None:
+    """Runs Google Document AI's general-purpose OCR processor on the same
+    PDF, as a cheap cross-check alongside Mathpix. Confirmed against real
+    production data that Mathpix mis-crops some multi-line question raster
+    images, consistently losing the tail of the sentence on retries of the
+    identical file — a second, independent OCR reading lets the extraction
+    LLM tell "the source genuinely ends here" apart from "Mathpix specifically
+    missed this part," instead of relying on Mathpix alone.
+
+    Documents over DOCUMENT_AI_SYNC_PAGE_LIMIT pages are split into
+    <=15-page chunks (see _split_pdf_into_chunks()) and each chunk is sent
+    through the sync endpoint separately, then concatenated in page order —
+    confirmed necessary against a real 19-page worksheet where entire pages
+    had no cross-check at all under the old single-call-or-skip behavior.
+
+    Returns None (skipped, not an error) if Document AI isn't configured, or
+    every chunk's call fails (auth, network, quota) — this is a best-effort
+    cross-check, not the primary OCR source, so any failure here just means
+    the pipeline falls back to Mathpix alone, same as before this existed.
+    """
+    if not (
+        GOOGLE_APPLICATION_CREDENTIALS_JSON
+        and GOOGLE_DOCUMENT_AI_PROJECT_ID
+        and GOOGLE_DOCUMENT_AI_LOCATION
+        and GOOGLE_DOCUMENT_AI_PROCESSOR_ID
+    ):
+        return None
+
+    try:
+        credentials_info = json.loads(GOOGLE_APPLICATION_CREDENTIALS_JSON)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info, scopes=_DOCUMENT_AI_SCOPES
+        )
+        credentials.refresh(GoogleAuthRequest())
+    except Exception:
+        return None
+
+    try:
+        page_count = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+    except Exception:
+        page_count = 0
+
+    if page_count <= DOCUMENT_AI_SYNC_PAGE_LIMIT:
+        return _document_ai_process_chunk(pdf_bytes, credentials)
+
+    chunk_texts = []
+    for chunk_bytes in _split_pdf_into_chunks(pdf_bytes, DOCUMENT_AI_SYNC_PAGE_LIMIT):
+        credentials.refresh(GoogleAuthRequest())
+        text = _document_ai_process_chunk(chunk_bytes, credentials)
+        if text:
+            chunk_texts.append(text)
+    return "\n\n".join(chunk_texts) or None
 
 
 def _extract_image_urls(markdown: str) -> list[str]:
@@ -731,6 +781,88 @@ def _merge_question_lists(
     return merged
 
 
+def _normalize_for_dedupe(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _options_similarity(a: ExtractedQuestion, b: ExtractedQuestion) -> float | None:
+    """Fuzzy similarity between two questions' answer-option sets, or None if
+    either has no options to compare (a free-response question)."""
+
+    def key(q: ExtractedQuestion) -> str:
+        return " ".join(sorted((opt.get("text") or "").strip().lower() for opt in q.options))
+
+    ka, kb = key(a), key(b)
+    if not ka or not kb:
+        return None
+    return difflib.SequenceMatcher(None, ka, kb).ratio()
+
+
+def _is_likely_duplicate(a: ExtractedQuestion, b: ExtractedQuestion) -> bool:
+    """True if `a` and `b` are almost certainly the same underlying question
+    surviving the merge as two separate entries — confirmed against a real
+    worksheet where _question_match_key's exact-option-text matching failed
+    to align a primary/secondary pair whose options an OCR source rendered
+    slightly differently (e.g. "H₂S" vs "H2S", added/dropped quote marks, an
+    extra option one source caught and the other didn't), so both copies got
+    inserted by _merge_question_lists's non-equal-opcode fallback instead of
+    being collapsed into one.
+
+    Compares the head (the passage/speaker identifier, most stable across
+    OCR reads) AND the tail (the actual instruction/stem, e.g. "Which
+    quotation... most effectively illustrates the claim?") separately rather
+    than the whole text, because one copy is sometimes truncated mid-passage
+    (a chunk-boundary artifact) — a whole-text similarity ratio penalizes
+    that missing middle so heavily it can miss a real duplicate.
+
+    Head/tail matching alone isn't enough, though: confirmed against a
+    second real worksheet (vocabulary-in-context questions, where every
+    single question reuses the identical template — "The following text is
+    adapted from ___'s ___ short story/novel/poem "___"." ... "as it is used
+    in the text, ___ most nearly means") that two ENTIRELY DIFFERENT
+    questions can share a near-identical head and tail purely because the
+    worksheet's own boilerplate is uniform across all of them, producing a
+    false-positive collapse. Requiring the answer options to also line up
+    (fuzzy, not exact — the same OCR-variance tolerance as the head/tail
+    check) corroborates the head/tail signal: two different vocabulary
+    questions will have completely different option words even when their
+    surrounding template text is identical, while a true duplicate's options
+    are the same underlying content modulo OCR noise.
+    """
+    na, nb = _normalize_for_dedupe(a.prompt_text), _normalize_for_dedupe(b.prompt_text)
+    head = difflib.SequenceMatcher(None, na[:60], nb[:60]).ratio()
+    tail = difflib.SequenceMatcher(None, na[-80:], nb[-80:]).ratio()
+    if head <= 0.8 or tail <= 0.8:
+        return False
+    opt_sim = _options_similarity(a, b)
+    return opt_sim > 0.6 if opt_sim is not None else True
+
+
+def _dedupe_merged_questions(questions: list[ExtractedQuestion]) -> list[ExtractedQuestion]:
+    """Collapses duplicate entries _merge_question_lists left behind (see
+    _is_likely_duplicate for why they occur). Between a duplicate pair,
+    keeps whichever copy is more complete: has a diagram attached, else has
+    more answer options, else has the longer prompt_text — falling back to
+    the earlier (primary/Mathpix) copy, consistent with _merge_question_lists'
+    own default preference for primary."""
+    deduped: list[ExtractedQuestion] = []
+    for q in questions:
+        dup_index = next((i for i, kept in enumerate(deduped) if _is_likely_duplicate(q, kept)), None)
+        if dup_index is None:
+            deduped.append(q)
+            continue
+        kept = deduped[dup_index]
+        if bool(q.image_url) != bool(kept.image_url):
+            if q.image_url:
+                deduped[dup_index] = q
+        elif len(q.options) != len(kept.options):
+            if len(q.options) > len(kept.options):
+                deduped[dup_index] = q
+        elif len(q.prompt_text) > len(kept.prompt_text):
+            deduped[dup_index] = q
+    return deduped
+
+
 def extract_questions(ocr_text: str, secondary_ocr_text: str | None = None) -> ExtractionResult:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
@@ -740,7 +872,7 @@ def extract_questions(ocr_text: str, secondary_ocr_text: str | None = None) -> E
 
     if secondary_ocr_text:
         secondary_questions, _ = _extract_one_source(client, secondary_ocr_text)
-        questions = _merge_question_lists(primary_questions, secondary_questions)
+        questions = _dedupe_merged_questions(_merge_question_lists(primary_questions, secondary_questions))
     else:
         questions = primary_questions
 
