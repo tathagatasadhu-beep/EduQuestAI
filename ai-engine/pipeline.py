@@ -579,12 +579,16 @@ def _split_ocr_text(text: str) -> tuple[str, str]:
         after = body[pos:].lstrip("\n")
         if _BARE_STEM_PATTERN.match(after) or _BARE_OPTION_PATTERN.match(after):
             return False
-        # A markdown table ("| ... |" rows) right before the boundary belongs
-        # to whichever question follows it — splitting here would separate a
-        # table from the question that depends on it, the same class of bug
-        # as splitting a passage from its own stem.
+        # A markdown table ("| ... |" rows) OR an image reference
+        # ("![](https://cdn.mathpix.com/...)") right before the boundary
+        # belongs to whichever question follows it — splitting here would
+        # separate it from the question that depends on it, the same class
+        # of bug as splitting a passage from its own stem. Confirmed on a
+        # real worksheet: an image landing right at a chunk boundary gets
+        # orphaned from its own question, which then renders with no
+        # diagram at all.
         last_line = body[:pos].rstrip("\n").rsplit("\n", 1)[-1]
-        return "|" not in last_line
+        return "|" not in last_line and "![" not in last_line
 
     boundary = None
     search_end = midpoint
