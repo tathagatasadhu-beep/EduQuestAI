@@ -92,7 +92,7 @@ export type QuestionOut = {
   prompt_latex: string | null;
   image_path: string | null;
   difficulty: "easy" | "medium" | "hard" | null;
-  question_type: "multiple_choice" | "free_response";
+  question_type: "multiple_choice" | "free_response" | "number_line";
   options: QuestionOption[];
   requires_self_assessment: boolean;
 };

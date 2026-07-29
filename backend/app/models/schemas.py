@@ -117,7 +117,7 @@ class QuestionOut(BaseModel):
     prompt_latex: Optional[str] = None
     image_path: Optional[str] = None
     difficulty: Optional[Literal["easy", "medium", "hard"]] = None
-    question_type: Literal["multiple_choice", "free_response"]
+    question_type: Literal["multiple_choice", "free_response", "number_line"]
     options: list[dict] = []  # [{option_label, option_text}] — is_correct withheld client-side
     # True only for proof/open-ended free-response questions with no single
     # checkable answer — gates the reveal+self-report flow vs. plain

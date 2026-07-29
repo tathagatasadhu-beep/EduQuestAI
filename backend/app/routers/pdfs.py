@@ -19,6 +19,7 @@ deactivation removes the questions from future serving (see
 quiz.py::next_question) while leaving history/mastery intact.
 """
 import asyncio
+import json
 import re
 import sys
 import uuid
@@ -483,13 +484,20 @@ async def _process_pdf(pdf_id: UUID) -> None:
 
                 image_path = await _store_question_image(eq.image_url) if eq.image_url else None
 
+                if eq.number_line_answer:
+                    question_type = "number_line"
+                elif len(eq.options) > 1:
+                    question_type = "multiple_choice"
+                else:
+                    question_type = "free_response"
+
                 question = Question(
                     pdf_id=pdf_id,
                     topic_id=topic.id,
                     prompt_text=eq.prompt_text,
                     prompt_latex=eq.prompt_latex,
                     difficulty=eq.difficulty_guess,
-                    question_type="multiple_choice" if len(eq.options) > 1 else "free_response",
+                    question_type=question_type,
                     image_path=image_path,
                     requires_self_assessment=eq.requires_self_assessment,
                     sort_order=await _next_sort_order(topic.id),
@@ -497,15 +505,28 @@ async def _process_pdf(pdf_id: UUID) -> None:
                 db.add(question)
                 await db.flush()
 
-                for opt in eq.options:
+                if question_type == "number_line":
+                    # Same single-row-answer storage free_response already uses —
+                    # option_text just holds the interval structure as JSON instead
+                    # of a plain word. See quiz.py::_matches_number_line.
                     db.add(
                         AnswerKey(
                             question_id=question.id,
-                            option_label=opt.get("label"),
-                            option_text=opt["text"],
-                            is_correct=opt.get("is_correct", False),
+                            option_label=None,
+                            option_text=json.dumps(eq.number_line_answer),
+                            is_correct=True,
                         )
                     )
+                else:
+                    for opt in eq.options:
+                        db.add(
+                            AnswerKey(
+                                question_id=question.id,
+                                option_label=opt.get("label"),
+                                option_text=opt["text"],
+                                is_correct=opt.get("is_correct", False),
+                            )
+                        )
 
             pdf.status = "extracted"
             pdf.ocr_text = result.ocr_text

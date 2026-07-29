@@ -33,6 +33,7 @@ same as an outright miss always was). The frontend signals a retry via
 `AttemptSubmit.is_retry=True` on the 2nd call.
 """
 import asyncio
+import json
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
@@ -99,7 +100,58 @@ def _correct_answer_text(question_type: str, answer_rows: list[AnswerKey]) -> st
     correct_row = next((a for a in answer_rows if a.is_correct), None)
     if correct_row is None:
         return ""
+    if question_type == "number_line":
+        parsed = _parse_interval_json(correct_row.option_text)
+        return parsed["text"] if parsed else correct_row.option_text
     return correct_row.option_label if question_type == "multiple_choice" and correct_row.option_label else correct_row.option_text
+
+
+def _parse_interval_json(raw: str) -> dict | None:
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("intervals"), list):
+        return None
+    return data
+
+
+_INTERVAL_EPSILON = 1e-6
+
+
+def _intervals_match(a: dict, b: dict) -> bool:
+    def bound_matches(a_val, a_incl, b_val, b_incl) -> bool:
+        if a_val is None or b_val is None:
+            return a_val is None and b_val is None
+        return abs(a_val - b_val) < _INTERVAL_EPSILON and bool(a_incl) == bool(b_incl)
+
+    return bound_matches(a.get("lower"), a.get("lower_inclusive"), b.get("lower"), b.get("lower_inclusive")) and bound_matches(
+        a.get("upper"), a.get("upper_inclusive"), b.get("upper"), b.get("upper_inclusive")
+    )
+
+
+def _matches_number_line(submitted: str, correct_json: str) -> bool:
+    """Compares the student's drawn interval(s) against the correct answer —
+    both sides use the same {"intervals": [{"lower", "lower_inclusive",
+    "upper", "upper_inclusive"}]} shape (see ai-engine/pipeline.py's
+    number_line_answer). Sorted by lower bound (None/-infinity first) before
+    a positional comparison so interval order never matters."""
+    submitted_data = _parse_interval_json(submitted)
+    correct_data = _parse_interval_json(correct_json)
+    if not submitted_data or not correct_data:
+        return False
+    submitted_intervals = submitted_data["intervals"]
+    correct_intervals = correct_data["intervals"]
+    if len(submitted_intervals) != len(correct_intervals):
+        return False
+
+    def sort_key(interval: dict):
+        lower = interval.get("lower")
+        return (lower is None, lower if lower is not None else 0)
+
+    submitted_sorted = sorted(submitted_intervals, key=sort_key)
+    correct_sorted = sorted(correct_intervals, key=sort_key)
+    return all(_intervals_match(s, c) for s, c in zip(submitted_sorted, correct_sorted))
 
 
 def _apply_streak(student: Student, prior_last_attempt_at: datetime | None, today: date) -> None:
@@ -286,6 +338,8 @@ async def submit_answer(
     correct_row = next((a for a in answer_rows if a.is_correct), None)
     if question.question_type == "free_response" and payload.self_reported_correct is not None:
         is_correct = payload.self_reported_correct
+    elif question.question_type == "number_line":
+        is_correct = correct_row is not None and _matches_number_line(payload.submitted_answer, correct_row.option_text)
     else:
         is_correct = correct_row is not None and _matches(question.question_type, payload.submitted_answer, correct_row)
     correct_answer = _correct_answer_text(question.question_type, answer_rows)

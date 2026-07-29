@@ -112,6 +112,16 @@ class ExtractedQuestion:
     # unambiguous. Gates the student-facing self-assessment (reveal + self-
     # report) flow vs. plain auto-grading.
     requires_self_assessment: bool = False
+    # Set only when the question explicitly asks for a number-line
+    # representation ("show its solution on a number line", "draw this
+    # interval on a number line", "highlight all possible values on a number
+    # line") — {"intervals": [{"lower": float|None, "lower_inclusive": bool|None,
+    # "upper": float|None, "upper_inclusive": bool|None}], "text": "human-
+    # readable fallback, e.g. 'y > 2'"}. None bound = unbounded (±infinity).
+    # None for every other question — gates the number-line widget/grading
+    # path in pdfs.py and quiz.py, same way requires_self_assessment gates
+    # the reveal+self-report path.
+    number_line_answer: dict | None = None
 
 
 @dataclass
@@ -421,6 +431,22 @@ explanation, "show that...", "prove that...", "explain why..."). Set "requires_s
 true only for the open-ended case; false for everything else, including most free-response questions
 (e.g. "Solve for x: 2x+3=11" is false — it has one definite answer, "4").
 
+Some questions ask the student to represent an inequality's solution — or an already-given interval —
+as a picture on a number line, rather than (or in addition to) writing it as text. This shows up in a few
+equivalent phrasings: "Solve each inequality and show its solution on a number line," "Draw each interval
+on a number line," "On a number line, highlight all possible values of x." When a question's instructional
+stem asks for this — check the SHARED stem for lettered sub-parts too, e.g. "Solve each inequality and
+show its solution on a number line" stated once above a, b, c, ... applies to every sub-part even though
+only the shared stem says so — solve or parse it into "number_line_answer": an object with "intervals" (a
+list of one interval — {"lower": number or null, "lower_inclusive": true/false or null, "upper": number or
+null, "upper_inclusive": true/false or null}, where null for a bound means unbounded/infinity on that side)
+and "text" (a short human-readable version, e.g. "y > 2" or "-3 < x < 3"). "prompt_text" itself is
+untouched by this — it stays exactly the original question, never the solved answer, same separation
+already used between a free-response question and its accepted-answer option. Set "number_line_answer" to
+null for every other question. Never guess at this structure for a question that doesn't actually ask for
+a number-line representation — an ordinary "solve for x" with no number-line mention stays a normal
+free-response question instead.
+
 "prompt_text" is the ONLY version of the question ever shown to the student — it must be clean, plain,
 human-readable text with NO LaTeX commands or backslashes of any kind, even for symbols that don't have
 an obvious plain-text equivalent. Convert everything to plain Unicode instead: write "π" not "\\pi", "°"
@@ -556,13 +582,49 @@ Respond with a JSON object of exactly this shape, no prose, no markdown fences:
       "topic_guess": "short topic name, e.g. 'Related Rates'",
       "difficulty_guess": "easy" | "medium" | "hard",
       "image_url": "the cdn.mathpix.com URL for this question's diagram, verbatim, or null",
-      "requires_self_assessment": true | false
+      "requires_self_assessment": true | false,
+      "number_line_answer": {
+        "intervals": [{"lower": -3, "lower_inclusive": false, "upper": 3, "upper_inclusive": false}],
+        "text": "-3 < x < 3"
+      }
     }
   ]
 }
 
 For free-response questions (no multiple-choice options), return a single option
-with "label": null and "text" set to the accepted answer."""
+with "label": null and "text" set to the accepted answer.
+
+Use "number_line_answer": null for every question except the number-line kind described above — the
+example value shown is only to illustrate the shape, not a default to fill in."""
+
+
+def _parse_number_line_answer(value: object) -> dict | None:
+    """Defensively validates the model's number_line_answer shape — malformed
+    or missing data just falls back to None (today's existing free_response/
+    self_assessment classification), never a crash, since loose JSON mode
+    gives no schema guarantee."""
+    if not isinstance(value, dict):
+        return None
+    intervals = value.get("intervals")
+    text = value.get("text")
+    if not isinstance(intervals, list) or not intervals or not isinstance(text, str):
+        return None
+    cleaned = []
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            return None
+        try:
+            lower = float(interval["lower"]) if interval.get("lower") is not None else None
+            upper = float(interval["upper"]) if interval.get("upper") is not None else None
+        except (TypeError, ValueError):
+            return None
+        cleaned.append({
+            "lower": lower,
+            "lower_inclusive": bool(interval.get("lower_inclusive")) if lower is not None else None,
+            "upper": upper,
+            "upper_inclusive": bool(interval.get("upper_inclusive")) if upper is not None else None,
+        })
+    return {"intervals": cleaned, "text": text}
 
 
 def _parse_question(item: dict) -> ExtractedQuestion:
@@ -574,6 +636,7 @@ def _parse_question(item: dict) -> ExtractedQuestion:
         difficulty_guess=item.get("difficulty_guess") or "medium",
         image_url=item.get("image_url"),
         requires_self_assessment=bool(item.get("requires_self_assessment")),
+        number_line_answer=_parse_number_line_answer(item.get("number_line_answer")),
     )
 
 

@@ -4,6 +4,12 @@ import { Fragment, useRef, useState } from "react";
 import { BookmarkPlus, CheckCircle2, Loader2, MessageCircleQuestion, XCircle } from "lucide-react";
 import type { AttemptResult, QuestionOut } from "@/lib/api";
 import MathKeyboard, { type MathToken } from "@/components/MathKeyboard";
+import NumberLineInput, {
+  EMPTY_NUMBER_LINE_VALUE,
+  hasNumberLineAnswer,
+  serializeNumberLineAnswer,
+  type NumberLineValue,
+} from "@/components/NumberLineInput";
 import TutorChat from "@/components/TutorChat";
 
 // Fill-in-the-blank questions ("Which choice completes the text...") carry
@@ -145,6 +151,7 @@ export default function QuestionCard({
   onSkip?: () => void;
 }) {
   const [answer, setAnswer] = useState("");
+  const [numberLineValue, setNumberLineValue] = useState<NumberLineValue>(EMPTY_NUMBER_LINE_VALUE);
   const [submitting, setSubmitting] = useState(false);
   const [revealing, setRevealing] = useState(false);
   const [revealedAnswer, setRevealedAnswer] = useState<string | null>(null);
@@ -154,6 +161,7 @@ export default function QuestionCard({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isMultipleChoice = question.question_type === "multiple_choice";
+  const isNumberLine = question.question_type === "number_line";
   // Only proof/open-ended free-response questions (no single checkable
   // answer) use the reveal + self-report flow — everything else, including
   // most free-response questions, auto-grades on submit like multiple_choice.
@@ -187,16 +195,21 @@ export default function QuestionCard({
   }
 
   async function handleSubmit(selfReportedCorrect?: boolean) {
-    if (!answer || submitting) return;
+    const submittedAnswer = isNumberLine ? serializeNumberLineAnswer(numberLineValue) : answer;
+    const hasAnswer = isNumberLine ? hasNumberLineAnswer(numberLineValue) : !!answer;
+    if (!hasAnswer || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await onSubmit(answer, selfReportedCorrect, retryPending);
+      const res = await onSubmit(submittedAnswer, selfReportedCorrect, retryPending);
       setResult(res);
       // Clear the input for a fresh 2nd try instead of leaving the same
       // (wrong) selection sitting there — a bare re-submit would just fail
       // the same way again.
-      if (res.can_retry) setAnswer("");
+      if (res.can_retry) {
+        setAnswer("");
+        setNumberLineValue(EMPTY_NUMBER_LINE_VALUE);
+      }
     } catch {
       setError("Couldn't submit that answer — try again.");
     } finally {
@@ -246,7 +259,14 @@ export default function QuestionCard({
 
       {renderPromptText(question.prompt_text)}
 
-      {isMultipleChoice ? (
+      {isNumberLine ? (
+        <NumberLineInput
+          promptText={question.prompt_text}
+          value={numberLineValue}
+          onChange={setNumberLineValue}
+          disabled={answered}
+        />
+      ) : isMultipleChoice ? (
         <div className="flex flex-col gap-2">
           {question.options.map((opt) => {
             const label = opt.option_label ?? opt.option_text;
@@ -332,7 +352,7 @@ export default function QuestionCard({
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={() => (usesSelfAssessment ? handleReveal() : handleSubmit())}
-              disabled={!answer || submitting || revealing}
+              disabled={(isNumberLine ? !hasNumberLineAnswer(numberLineValue) : !answer) || submitting || revealing}
               className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-600 py-3 font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {(submitting || revealing) && <Loader2 className="h-4 w-4 animate-spin" />}
