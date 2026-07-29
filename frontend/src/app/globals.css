@@ -43,6 +43,14 @@ body {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
 
+/* Question prompt/options/answer text specifically (not surrounding UI
+   chrome like buttons or badges) — a worksheet-style serif per the
+   student-page design brief, kept as a plain CSS class since Cambria is a
+   system font with no next/font setup needed. */
+.font-question {
+  font-family: Cambria, Georgia, "Times New Roman", serif;
+}
+
 /* Floating "+N XP" toast that rises and fades after a correct answer. */
 @keyframes float-up {
   0% {

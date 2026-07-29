@@ -23,6 +23,14 @@ a correct retry. For free-response questions, `is_correct` comes from the
 student's own self-report (paired with reveal above) rather than an exact
 string match, since answers like proofs have no single canonical string —
 multiple_choice is unaffected and still auto-graded.
+
+A wrong first attempt on any auto-graded question (not self-assessment) gets
+one immediate in-sitting retry instead of being scored right away: nothing is
+finalized (0 XP, review queue untouched, `can_retry=True`) until the student
+either gets it right on the retry (half XP, still flagged for review — a
+retry was needed either way) or misses it again (0 XP, flagged for review,
+same as an outright miss always was). The frontend signals a retry via
+`AttemptSubmit.is_retry=True` on the 2nd call.
 """
 import asyncio
 from datetime import date, datetime, timedelta, timezone
@@ -233,6 +241,24 @@ def _matches(question_type: str, submitted: str, correct: AnswerKey) -> bool:
     return submitted.strip().casefold() == target.strip().casefold()
 
 
+def _reset_review_queue_entry(
+    review_row: ReviewQueue | None, student_id: UUID, question_id: UUID, now: datetime
+) -> ReviewQueue | None:
+    """Resets an existing review-queue row (or builds a new one to insert) to
+    the "needs review" state. Used whenever a question's attempt sequence for
+    this sitting concludes with a miss anywhere in it — a first-attempt miss
+    on a non-retry-eligible question, a final wrong retry, or a retry that
+    eventually landed correct (still worth flagging — see submit_answer)."""
+    if review_row is not None:
+        review_row.consecutive_correct = 0
+        review_row.resolved = False
+        review_row.last_seen_at = now
+        return None
+    return ReviewQueue(
+        student_id=student_id, question_id=question_id, consecutive_correct=0, resolved=False, last_seen_at=now
+    )
+
+
 @router.post("/submit", response_model=AttemptResult)
 async def submit_answer(
     payload: AttemptSubmit,
@@ -287,6 +313,28 @@ async def submit_answer(
     )
 
     now = datetime.now(timezone.utc)
+
+    # A wrong first attempt on an auto-graded question doesn't finalize
+    # anything yet — give the student one immediate retry before scoring or
+    # touching the review queue, instead of flagging on the very first miss.
+    # Self-assessment questions (reveal-answer + self-report) skip this
+    # entirely: there's no "retry" once the answer's already been shown.
+    retry_eligible = not question.requires_self_assessment
+    if not is_correct and not payload.is_retry and retry_eligible:
+        _apply_streak(student_row, prior_last_attempt_at, now.date())
+        await db.commit()
+        return AttemptResult(
+            is_correct=False,
+            correct_answer=correct_answer,
+            explanation=None,
+            added_to_review_queue=False,
+            xp_awarded=0,
+            xp_total=student_row.xp_total,
+            streak_days=student_row.streak_days,
+            can_retry=True,
+            attempt_number=1,
+        )
+
     review_row = (
         await db.execute(
             select(ReviewQueue).where(
@@ -295,9 +343,12 @@ async def submit_answer(
         )
     ).scalar_one_or_none()
 
+    is_retry_conclusion = payload.is_retry and retry_eligible
     xp_awarded = 0
     added_to_review_queue = False
-    if is_correct:
+    if is_correct and not is_retry_conclusion:
+        # Clean first-attempt correct (or a self-assessment correct, which
+        # never goes through the retry path) — unchanged from before.
         xp_awarded += XP_PER_CORRECT
         if review_row is not None and not review_row.resolved:
             review_row.consecutive_correct += 1
@@ -306,21 +357,16 @@ async def submit_answer(
                 review_row.resolved = True
                 xp_awarded += XP_REVIEW_RESOLVED_BONUS
     else:
+        # Needing a retry at all — regardless of whether the retry itself
+        # lands correct — is the same "this one's shaky" signal as an
+        # outright miss, so it's flagged for review the same way; a
+        # retry-correct still earns half credit instead of zero.
         added_to_review_queue = True
-        if review_row is not None:
-            review_row.consecutive_correct = 0
-            review_row.resolved = False
-            review_row.last_seen_at = now
-        else:
-            db.add(
-                ReviewQueue(
-                    student_id=payload.student_id,
-                    question_id=payload.question_id,
-                    consecutive_correct=0,
-                    resolved=False,
-                    last_seen_at=now,
-                )
-            )
+        if is_correct:
+            xp_awarded += XP_PER_CORRECT // 2
+        new_row = _reset_review_queue_entry(review_row, payload.student_id, payload.question_id, now)
+        if new_row is not None:
+            db.add(new_row)
 
     student_row.xp_total += xp_awarded
     _apply_streak(student_row, prior_last_attempt_at, now.date())
@@ -335,4 +381,6 @@ async def submit_answer(
         xp_awarded=xp_awarded,
         xp_total=student_row.xp_total,
         streak_days=student_row.streak_days,
+        can_retry=False,
+        attempt_number=2 if payload.is_retry else 1,
     )

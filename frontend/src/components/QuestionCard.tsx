@@ -119,7 +119,7 @@ function renderPromptText(text: string) {
     block.table ? (
       <DataTable key={i} rows={parseMarkdownTable(block.content)} />
     ) : (
-      <p key={i} className="mb-5 whitespace-pre-wrap text-lg font-semibold text-zinc-800">
+      <p key={i} className="font-question mb-5 whitespace-pre-wrap text-lg font-semibold text-zinc-800">
         {renderInlineText(block.content, `b${i}`)}
       </p>
     ),
@@ -131,13 +131,18 @@ export default function QuestionCard({
   onSubmit,
   onReveal,
   onNext,
+  onSkip,
 }: {
   question: QuestionOut;
-  onSubmit: (answer: string, selfReportedCorrect?: boolean) => Promise<AttemptResult>;
+  onSubmit: (answer: string, selfReportedCorrect?: boolean, isRetry?: boolean) => Promise<AttemptResult>;
   // Free-response only — looks up the correct answer without grading, so the
   // student can self-report whether they got it right (see below for why).
   onReveal: () => Promise<string>;
   onNext: () => void;
+  // Lets the student move on without answering (e.g. a hard question they
+  // want to come back to) — omit to hide the skip action entirely, e.g. when
+  // revisiting an already-skipped question there's nowhere further to skip to.
+  onSkip?: () => void;
 }) {
   const [answer, setAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -153,7 +158,12 @@ export default function QuestionCard({
   // answer) use the reveal + self-report flow — everything else, including
   // most free-response questions, auto-grades on submit like multiple_choice.
   const usesSelfAssessment = question.question_type === "free_response" && question.requires_self_assessment;
-  const answered = result !== null;
+  // A wrong first attempt on an auto-graded question comes back with
+  // can_retry=true instead of being final — the form stays open for one more
+  // try (see backend/app/routers/quiz.py::submit_answer for the grading
+  // rule this mirrors: full credit on attempt 1, half on a correct retry).
+  const retryPending = result !== null && result.can_retry;
+  const answered = result !== null && !result.can_retry;
 
   function handleInsert(token: MathToken) {
     const el = inputRef.current;
@@ -181,8 +191,12 @@ export default function QuestionCard({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await onSubmit(answer, selfReportedCorrect);
+      const res = await onSubmit(answer, selfReportedCorrect, retryPending);
       setResult(res);
+      // Clear the input for a fresh 2nd try instead of leaving the same
+      // (wrong) selection sitting there — a bare re-submit would just fail
+      // the same way again.
+      if (res.can_retry) setAnswer("");
     } catch {
       setError("Couldn't submit that answer — try again.");
     } finally {
@@ -252,8 +266,8 @@ export default function QuestionCard({
                   ${answered && !isCorrectOption && !isWrongSelection ? "border-zinc-100 opacity-60" : ""}
                   ${answered ? "cursor-not-allowed" : "cursor-pointer"}`}
               >
-                <span>
-                  <span className="mr-2 text-sky-500">{opt.option_label}</span>
+                <span className="font-question">
+                  <span className="mr-2 font-sans text-sky-500">{opt.option_label}</span>
                   {opt.option_text}
                 </span>
                 {isCorrectOption && <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" strokeWidth={2.5} />}
@@ -272,7 +286,7 @@ export default function QuestionCard({
             onChange={(e) => setAnswer(e.target.value)}
             onFocus={() => setKeyboardOpen(true)}
             placeholder="Type your answer..."
-            className="w-full rounded-xl border-2 border-zinc-200 px-4 py-3 font-medium focus:border-sky-400 focus:outline-none disabled:opacity-70"
+            className="font-question w-full rounded-xl border-2 border-zinc-200 px-4 py-3 font-medium focus:border-sky-400 focus:outline-none disabled:opacity-70"
           />
           {!answered && revealedAnswer === null && (
             <MathKeyboard open={keyboardOpen} onOpenChange={setKeyboardOpen} onInsert={handleInsert} />
@@ -308,42 +322,61 @@ export default function QuestionCard({
           </div>
         </div>
       ) : !answered ? (
-        <button
-          onClick={() => (usesSelfAssessment ? handleReveal() : handleSubmit())}
-          disabled={!answer || submitting || revealing}
-          className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-sky-600 py-3 font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {(submitting || revealing) && <Loader2 className="h-4 w-4 animate-spin" />}
-          {usesSelfAssessment
-            ? revealing
-              ? "Checking..."
-              : "Show Answer"
-            : submitting
-              ? "Checking..."
-              : "Submit Answer"}
-        </button>
+        <>
+          {retryPending && (
+            <p className="mt-4 flex items-center gap-1.5 text-sm font-semibold text-rose-500">
+              <XCircle className="h-4 w-4" strokeWidth={2.5} />
+              Not quite — try again!
+            </p>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              onClick={() => (usesSelfAssessment ? handleReveal() : handleSubmit())}
+              disabled={!answer || submitting || revealing}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-600 py-3 font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {(submitting || revealing) && <Loader2 className="h-4 w-4 animate-spin" />}
+              {usesSelfAssessment
+                ? revealing
+                  ? "Checking..."
+                  : "Show Answer"
+                : submitting
+                  ? "Checking..."
+                  : "Submit Answer"}
+            </button>
+            {onSkip && !retryPending && (
+              <button
+                onClick={onSkip}
+                className="rounded-xl px-4 py-3 text-sm font-semibold text-zinc-500 transition hover:bg-zinc-100"
+              >
+                Skip for now →
+              </button>
+            )}
+          </div>
+        </>
       ) : (
         <div className="mt-5">
-          <div
-            className={`flex items-start gap-2 rounded-xl px-4 py-3 font-semibold ${
-              result.is_correct ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
-            }`}
-          >
-            {result.is_correct ? (
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={2.5} />
-            ) : (
+          {result.is_correct ? (
+            <div className="mx-auto flex w-fit items-center gap-2 rounded-full bg-emerald-500 px-6 py-3 font-extrabold tracking-wide text-white uppercase">
+              <CheckCircle2 className="h-5 w-5 shrink-0" strokeWidth={2.5} />
+              Correct
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-xl bg-rose-50 px-4 py-3 font-semibold text-rose-700">
               <XCircle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={2.5} />
-            )}
-            <span>
-              {result.is_correct ? "Correct! Nice work." : `Not quite — the answer was ${result.correct_answer}.`}
-              {result.added_to_review_queue && (
-                <span className="mt-1 flex items-center gap-1 text-xs font-normal text-rose-500">
-                  <BookmarkPlus className="h-3.5 w-3.5" />
-                  Added to your review queue — you&apos;ll see this again soon.
-                </span>
-              )}
-            </span>
-          </div>
+              <span>Not quite — the answer was {result.correct_answer}.</span>
+            </div>
+          )}
+          <p className="mt-2 text-center text-xs font-medium text-sky-400">
+            {result.attempt_number} attempt{result.attempt_number > 1 ? "s" : ""} used
+            {result.attempt_number > 1 && result.is_correct && " — half credit"}
+          </p>
+          {result.added_to_review_queue && (
+            <p className="mt-2 flex items-center justify-center gap-1 text-center text-xs font-normal text-rose-500">
+              <BookmarkPlus className="h-3.5 w-3.5" />
+              Added to your review queue — you&apos;ll see this again soon.
+            </p>
+          )}
 
           {!result.is_correct && (
             <div className="mt-4">

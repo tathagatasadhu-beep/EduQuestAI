@@ -138,6 +138,10 @@ class AttemptSubmit(BaseModel):
     # since free-response answers (e.g. proofs) often have no single correct
     # string. Ignored for multiple_choice, which stays auto-graded.
     self_reported_correct: Optional[bool] = None
+    # True on the 2nd submission of the same question in the same sitting,
+    # after a wrong first attempt returned can_retry=True. See
+    # quiz.py::submit_answer for the resulting half-credit/review-queue rules.
+    is_retry: bool = False
 
 
 class AttemptResult(BaseModel):
@@ -148,6 +152,12 @@ class AttemptResult(BaseModel):
     xp_awarded: int = 0
     xp_total: int
     streak_days: int
+    # True only for a wrong first attempt on an auto-graded question — tells
+    # the frontend to offer an immediate retry instead of the final banner.
+    can_retry: bool = False
+    # 1 or 2 within this sitting (not the lifetime Attempt.attempt_number
+    # used for review-queue cooldown) — powers the "N attempt(s) used" caption.
+    attempt_number: int = 1
 
 
 class MasteryStat(BaseModel):

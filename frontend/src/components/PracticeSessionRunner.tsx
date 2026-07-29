@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Loader2, PartyPopper } from "lucide-react";
+import LearningTools from "@/components/LearningTools";
 import QuestionCard from "@/components/QuestionCard";
+import QuestionNavigator, { type NavigatorItem } from "@/components/QuestionNavigator";
 import StreakBadge from "@/components/StreakBadge";
 import XPBar from "@/components/XPBar";
 import { revealAnswer, submitAnswer, useQuizProgress } from "@/lib/useQuizProgress";
@@ -57,10 +59,12 @@ export default function PracticeSessionRunner({
   const correctCount = Object.values(answeredMap).filter(Boolean).length;
   const answeredCount = Object.keys(answeredMap).length;
 
-  async function handleSubmit(answer: string, selfReportedCorrect?: boolean): Promise<AttemptResult> {
-    const result = await submitAnswer(studentId, question!.id, answer, selfReportedCorrect);
+  async function handleSubmit(answer: string, selfReportedCorrect?: boolean, isRetry?: boolean): Promise<AttemptResult> {
+    const result = await submitAnswer(studentId, question!.id, answer, selfReportedCorrect, isRetry);
     applyResult(result);
-    setAnsweredMap((prev) => ({ ...prev, [question!.id]: result.is_correct }));
+    if (!result.can_retry) {
+      setAnsweredMap((prev) => ({ ...prev, [question!.id]: result.is_correct }));
+    }
     return result;
   }
 
@@ -92,51 +96,31 @@ export default function PracticeSessionRunner({
       )}
 
       {questions && questions.length > 0 && (
-        <div className="flex gap-5">
-          <aside className="w-20 shrink-0">
-            <div className="mb-4 flex flex-col items-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-sky-500 text-sm font-bold text-sky-700">
-                {correctCount}/{questions.length}
-              </div>
-              <p className="mt-1 text-center text-[10px] font-semibold tracking-wide text-sky-400 uppercase">
-                Your Score
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {questions.map((q, i) => {
-                const isAnswered = q.id in answeredMap;
-                const isCorrect = answeredMap[q.id];
-                const isCurrent = i === currentIndex;
-                return (
-                  <button
-                    key={q.id}
-                    onClick={() => setCurrentIndex(i)}
-                    className={`rounded-lg py-1.5 text-xs font-bold transition ${
-                      isCurrent ? "ring-2 ring-sky-500" : ""
-                    } ${
-                      isAnswered
-                        ? isCorrect
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-rose-100 text-rose-700"
-                        : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200"
-                    }`}
-                  >
-                    {i + 1}
-                  </button>
-                );
-              })}
-            </div>
-          </aside>
+        <div className="flex flex-col gap-5 lg:flex-row">
+          <QuestionNavigator
+            items={questions.map((q, i): NavigatorItem => ({
+              id: q.id,
+              label: String(i + 1),
+              state: q.id in answeredMap ? (answeredMap[q.id] ? "correct" : "incorrect") : "unanswered",
+            }))}
+            correctCount={correctCount}
+            totalCount={questions.length}
+            currentIndex={currentIndex}
+            onSelect={setCurrentIndex}
+          />
 
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             {question && (
-              <QuestionCard
-                key={question.id}
-                question={question}
-                onSubmit={handleSubmit}
-                onReveal={() => revealAnswer(question.id)}
-                onNext={handleNext}
-              />
+              <>
+                <QuestionCard
+                  key={question.id}
+                  question={question}
+                  onSubmit={handleSubmit}
+                  onReveal={() => revealAnswer(question.id)}
+                  onNext={handleNext}
+                />
+                <LearningTools topicId={topicId} subjectId={question.subject_id} subjectName={question.subject_name} />
+              </>
             )}
             {!question && (
               <div className="flex flex-col items-center gap-2 rounded-3xl bg-white p-10 text-center shadow-lg ring-1 ring-sky-100">

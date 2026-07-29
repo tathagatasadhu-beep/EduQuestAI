@@ -107,6 +107,11 @@ export type AttemptResult = {
   xp_awarded: number;
   xp_total: number;
   streak_days: number;
+  // True only for a wrong first attempt on an auto-graded question — show a
+  // retry state instead of the final correct/incorrect banner.
+  can_retry: boolean;
+  // 1 or 2 within this sitting, not the lifetime attempt count.
+  attempt_number: number;
 };
 
 export type PdfUploadOut = {
@@ -262,6 +267,7 @@ export const api = {
       question_id: string;
       submitted_answer: string;
       self_reported_correct?: boolean;
+      is_retry?: boolean;
     }
   ) =>
     request<AttemptResult>("/api/quiz/submit", {

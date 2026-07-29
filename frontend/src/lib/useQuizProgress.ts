@@ -26,7 +26,8 @@ export async function submitAnswer(
   studentId: string,
   questionId: string,
   answer: string,
-  selfReportedCorrect?: boolean
+  selfReportedCorrect?: boolean,
+  isRetry?: boolean
 ): Promise<AttemptResult> {
   const res = await fetch("/api/quiz/submit", {
     method: "POST",
@@ -36,6 +37,7 @@ export async function submitAnswer(
       question_id: questionId,
       submitted_answer: answer,
       ...(selfReportedCorrect !== undefined ? { self_reported_correct: selfReportedCorrect } : {}),
+      ...(isRetry ? { is_retry: true } : {}),
     }),
   });
   const data = await res.json();
