@@ -42,7 +42,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.supabase_client import QUESTION_IMAGES_BUCKET, get_supabase_admin
-from app.db.orm import AnswerKey, Attempt, Question, ReviewQueue, Student, Subject, Topic
+from app.db.orm import AnswerKey, Attempt, Pdf, Question, ReviewQueue, Student, Subject, Topic
 from app.db.session import get_db
 from app.models.schemas import AttemptResult, AttemptSubmit, QuestionOut, RevealOut
 from app.routers.auth import get_current_student
@@ -57,6 +57,19 @@ XP_PER_CORRECT = 10
 XP_REVIEW_RESOLVED_BONUS = 15
 
 QUESTION_FILTERS = {"all", "missed_1st", "missed_2nd"}
+
+
+def _exclude_theory_pdf_questions(stmt):
+    """Excludes questions sourced from a theory-tagged PDF (Pdf.content_type)
+    from any student-facing practice/quiz query — theory worksheets ground
+    the AI tutor via Pdf.ocr_text, they were never meant to be served as
+    practice questions even on the rare worksheet where the extraction
+    pipeline does manage to pull real Q&A content out of one. A null
+    pdf_id (no known source, e.g. after a hard delete) defaults to
+    practiceable rather than silently disappearing."""
+    return stmt.outerjoin(Pdf, Pdf.id == Question.pdf_id).where(
+        or_(Pdf.content_type.is_(None), Pdf.content_type != "theory")
+    )
 
 
 async def _topic_and_subject(db: AsyncSession, topic_id: UUID) -> tuple[Topic, Subject]:
@@ -181,7 +194,7 @@ async def next_question(
     _, subject = await _topic_and_subject(db, topic_id)
     due_cutoff = datetime.now(timezone.utc) - REVIEW_COOLDOWN
 
-    due_review_stmt = (
+    due_review_stmt = _exclude_theory_pdf_questions(
         select(Question)
         .join(ReviewQueue, ReviewQueue.question_id == Question.id)
         .where(
@@ -198,7 +211,7 @@ async def next_question(
 
     if question is None:
         attempted_ids = select(Attempt.question_id).where(Attempt.student_id == student_id)
-        fresh_stmt = (
+        fresh_stmt = _exclude_theory_pdf_questions(
             select(Question)
             .where(Question.topic_id == topic_id, Question.is_active.is_(True), Question.id.notin_(attempted_ids))
             .order_by(Question.sort_order, Question.id)
@@ -207,7 +220,7 @@ async def next_question(
         question = (await db.execute(fresh_stmt)).scalars().first()
 
     if question is None:
-        stalest_stmt = (
+        stalest_stmt = _exclude_theory_pdf_questions(
             select(Question)
             .join(Attempt, Attempt.question_id == Question.id)
             .where(Question.topic_id == topic_id, Question.is_active.is_(True), Attempt.student_id == student_id)
@@ -245,7 +258,9 @@ async def list_questions(
     student_id = student["student_id"]
     _, subject = await _topic_and_subject(db, topic_id)
 
-    stmt = select(Question).where(Question.topic_id == topic_id, Question.is_active.is_(True))
+    stmt = _exclude_theory_pdf_questions(
+        select(Question).where(Question.topic_id == topic_id, Question.is_active.is_(True))
+    )
     if filter == "missed_1st":
         stmt = stmt.join(Attempt, Attempt.question_id == Question.id).where(
             Attempt.student_id == student_id, Attempt.attempt_number == 1, Attempt.is_correct.is_(False)

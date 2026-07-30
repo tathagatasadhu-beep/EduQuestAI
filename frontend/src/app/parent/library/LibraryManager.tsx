@@ -21,7 +21,10 @@ import type { PdfOut, PdfTopic, PdfUploadOut, Subject, Topic } from "@/lib/api";
 import UploadDropzone from "@/components/UploadDropzone";
 
 const GRADE_OPTIONS = ["7", "8", "9", "10", "11", "12", "SSAT", "SAT"];
-const PAGE_SIZE = 5;
+// Rows (one per worksheet/topic), not subjects — a single subject can easily
+// accumulate hundreds of worksheets across its topics, and paginating by
+// subject alone wouldn't help in that case (see FlatRow below).
+const ROWS_PER_PAGE = 25;
 
 const STATUS_META: Record<string, { label: string; icon: typeof Loader2; className: string }> = {
   pending: { label: "Queued", icon: Loader2, className: "text-zinc-500" },
@@ -42,6 +45,8 @@ type Row =
   | { kind: "pdf"; pdf: PdfOut }
   | { kind: "topic"; topic: Topic }
   | { kind: "empty" };
+
+type FlatRow = { subject: Subject; row: Row; key: string };
 
 export default function LibraryManager({
   initialSubjects,
@@ -325,9 +330,42 @@ export default function LibraryManager({
     );
   });
 
-  const totalPages = Math.max(1, Math.ceil(filteredSubjects.length / PAGE_SIZE));
+  // Flattened once across every filtered subject's worksheets/orphan-topics,
+  // then paginated by row — a subject with hundreds of worksheets across its
+  // topics would otherwise all land on a single "page" no matter how small
+  // PAGE_SIZE is, if pagination only sliced whole subjects.
+  const allFlatRows: FlatRow[] = filteredSubjects.flatMap((subject) => {
+    const topics = topicsBySubject[subject.id] ?? [];
+    const subjectPdfs = pdfs
+      .filter((p) => p.subject_id === subject.id)
+      .filter((p) => contentTypeFilter === "all" || p.content_type === contentTypeFilter);
+    const coveredTopicIds = new Set(subjectPdfs.flatMap((p) => p.topics.map((t) => t.id)));
+    const orphanTopics = topics.filter((t) => !coveredTopicIds.has(t.id));
+
+    const rows: Row[] = [
+      ...subjectPdfs.map((pdf): Row => ({ kind: "pdf", pdf })),
+      ...orphanTopics.map((topic): Row => ({ kind: "topic", topic })),
+    ];
+    if (rows.length === 0) rows.push({ kind: "empty" });
+
+    return rows.map((row, i): FlatRow => ({ subject, row, key: `${subject.id}-${i}` }));
+  });
+
+  const totalPages = Math.max(1, Math.ceil(allFlatRows.length / ROWS_PER_PAGE));
   const clampedPage = Math.min(page, totalPages - 1);
-  const pageSubjects = filteredSubjects.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE);
+  const pageFlatRows = allFlatRows.slice(clampedPage * ROWS_PER_PAGE, clampedPage * ROWS_PER_PAGE + ROWS_PER_PAGE);
+
+  // Grade/Subject cells use rowSpan to group a subject's consecutive rows —
+  // recomputed per page, since a subject's rows can now be split across two
+  // pages (each page then shows a partial rowSpan block for it, which is
+  // expected/normal for row-level pagination).
+  const rowSpans: number[] = new Array(pageFlatRows.length).fill(0);
+  for (let i = 0, runStart = 0; i <= pageFlatRows.length; i++) {
+    if (i === pageFlatRows.length || pageFlatRows[i].subject.id !== pageFlatRows[runStart].subject.id) {
+      rowSpans[runStart] = i - runStart;
+      runStart = i;
+    }
+  }
 
   function updateFilter(fn: () => void) {
     fn();
@@ -470,7 +508,7 @@ export default function LibraryManager({
             </tr>
           </thead>
           <tbody>
-            {pageSubjects.length === 0 && (
+            {pageFlatRows.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-zinc-400">
                   {sortedSubjects.length === 0
@@ -479,29 +517,20 @@ export default function LibraryManager({
                 </td>
               </tr>
             )}
-            {pageSubjects.map((subject) => {
+            {pageFlatRows.map((entry, i) => {
+              const { subject, row } = entry;
+              const span = rowSpans[i];
               const topics = topicsBySubject[subject.id] ?? [];
-              const subjectPdfs = pdfs
-                .filter((p) => p.subject_id === subject.id)
-                .filter((p) => contentTypeFilter === "all" || p.content_type === contentTypeFilter);
-              const coveredTopicIds = new Set(subjectPdfs.flatMap((p) => p.topics.map((t) => t.id)));
-              const orphanTopics = topics.filter((t) => !coveredTopicIds.has(t.id));
 
-              const rows: Row[] = [
-                ...subjectPdfs.map((pdf): Row => ({ kind: "pdf", pdf })),
-                ...orphanTopics.map((topic): Row => ({ kind: "topic", topic })),
-              ];
-              if (rows.length === 0) rows.push({ kind: "empty" });
-
-              return rows.map((row, i) => (
-                <tr key={`${subject.id}-${i}`} className="border-b border-zinc-100 last:border-0 hover:bg-brand-50/30">
-                  {i === 0 && (
-                    <td rowSpan={rows.length} className="border-r border-zinc-100 px-4 py-3 align-top font-medium text-zinc-600">
+              return (
+                <tr key={entry.key} className="border-b border-zinc-100 last:border-0 hover:bg-brand-50/30">
+                  {span > 0 && (
+                    <td rowSpan={span} className="border-r border-zinc-100 px-4 py-3 align-top font-medium text-zinc-600">
                       {subject.grade_level || "—"}
                     </td>
                   )}
-                  {i === 0 && (
-                    <td rowSpan={rows.length} className="border-r border-zinc-100 px-4 py-3 align-top">
+                  {span > 0 && (
+                    <td rowSpan={span} className="border-r border-zinc-100 px-4 py-3 align-top">
                       {editingSubjectId === subject.id ? (
                         <SubjectEditForm
                           subject={subject}
@@ -667,7 +696,7 @@ export default function LibraryManager({
                     </>
                   )}
                 </tr>
-              ));
+              );
             })}
           </tbody>
         </table>
