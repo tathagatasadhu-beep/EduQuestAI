@@ -678,13 +678,24 @@ _BARE_STEM_PATTERN = re.compile(
 _BARE_OPTION_PATTERN = re.compile(r"^[A-D][.\)]\s")
 
 
+def _extract_answer_key_block(text: str) -> tuple[str, str]:
+    """Splits `text` into (body, key_block) at the first _ANSWER_KEY_HEADING
+    match, or (text, "") if there isn't one. Shared by _split_ocr_text
+    (which reattaches key_block to both halves) and _extract_one_source
+    (which uses it to detect a split that could never converge — see
+    there for why)."""
+    key_match = _ANSWER_KEY_HEADING.search(text)
+    if key_match:
+        return text[: key_match.start()], text[key_match.start() :]
+    return text, ""
+
+
 def _split_ocr_text(text: str) -> tuple[str, str]:
     """Splits OCR markdown roughly in half at the nearest paragraph boundary
     that isn't a _BARE_STEM_PATTERN split point, keeping any answer-key
     section attached to both halves so ID-based answer matching still works
     after the split."""
-    key_match = _ANSWER_KEY_HEADING.search(text)
-    body, key_block = (text[: key_match.start()], text[key_match.start() :]) if key_match else (text, "")
+    body, key_block = _extract_answer_key_block(text)
 
     midpoint = len(body) // 2
 
@@ -784,15 +795,37 @@ def _extract_questions_chunk(client: OpenAI, ocr_text: str, depth: int = 0) -> t
 _PROACTIVE_CHUNK_THRESHOLD = 12000
 
 
-def _extract_one_source(client: OpenAI, text: str) -> tuple[list[ExtractedQuestion], str]:
+def _extract_one_source(client: OpenAI, text: str, depth: int = 0) -> tuple[list[ExtractedQuestion], str]:
     """Runs extraction on a single OCR reading, recursively halving it first
     if it's large (see _PROACTIVE_CHUNK_THRESHOLD) so no single call ever has
-    to process more than one reasonably-sized chunk's worth of questions."""
-    if len(text) <= _PROACTIVE_CHUNK_THRESHOLD:
+    to process more than one reasonably-sized chunk's worth of questions.
+
+    Refuses to split (processes the whole text as one chunk instead) when
+    the detected answer-key section (_ANSWER_KEY_HEADING, reattached to BOTH
+    halves on every split so either can still match its questions to the
+    right answer — see _split_ocr_text) is itself larger than
+    _PROACTIVE_CHUNK_THRESHOLD — confirmed via a real worksheet
+    (Arts_and_Humanities_Grade3_Reading_Workbook.pdf) that in that case
+    neither half can ever converge under the threshold no matter how many
+    times the body around it is halved (`len(text)` asymptotically
+    approaches the key block's own fixed size from above, never crossing
+    under it), and every one of the many resulting leaf calls ends up
+    re-extracting nearly the same shared key-block content independently —
+    confirmed as a real 16x question-count inflation (480 questions off a
+    14-page worksheet) before this check existed, not just a hypothetical.
+    The separate depth cap below is a general safety net for any other
+    not-yet-seen non-converging case, not the primary fix for this one.
+    """
+    _, key_block = _extract_answer_key_block(text)
+    if (
+        len(text) <= _PROACTIVE_CHUNK_THRESHOLD
+        or depth >= _MAX_SPLIT_DEPTH
+        or len(key_block) >= _PROACTIVE_CHUNK_THRESHOLD
+    ):
         return _extract_questions_chunk(client, text)
     left, right = _split_ocr_text(text)
-    left_questions, subject_guess = _extract_one_source(client, left)
-    right_questions, _ = _extract_one_source(client, right)
+    left_questions, subject_guess = _extract_one_source(client, left, depth + 1)
+    right_questions, _ = _extract_one_source(client, right, depth + 1)
     return left_questions + right_questions, subject_guess
 
 

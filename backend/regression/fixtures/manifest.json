@@ -12,5 +12,11 @@
     "docai_file": "wic_docai.txt",
     "expected_question_count": 58,
     "expects_table": false
+  },
+  {
+    "name": "grade3_reading_workbook",
+    "mathpix_file": "grade3_reading_mathpix.md",
+    "expected_question_count": 30,
+    "expects_table": false
   }
 ]
