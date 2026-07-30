@@ -519,6 +519,18 @@ in the text, what does the word X most nearly mean?" must never also get "Which 
 text..." tacked on; each question gets exactly the instructional line its own source text actually has,
 never more, never a different one.
 
+Some worksheets give ONE passage followed by SEVERAL separately-numbered questions about it (e.g. a
+passage, then "Q1. What is the main idea...", "Q2. According to the passage...", "Q3. ...", each with its
+own options) — this is different from the lettered-sub-parts case above (which is one problem number with
+lettered a/b/c parts) and different from a typical evidence-based question (which usually has its own
+short passage immediately before just that one question). Here, the SAME passage is shared by multiple
+independently-numbered questions in a row. Every one of those questions still needs the full passage
+copied into its OWN "prompt_text" — not just the first question in the group. Never rely on proximity in
+the source to decide whether a question "gets" the passage (only Q1 sits right after it); every question
+that depends on that passage to be answerable needs it repeated in full, exactly like the evidence-based
+case above, and for the same reason: each entry in the "questions" array must stand completely alone, since
+nothing else on the page is shown to the student alongside it.
+
 If the original text contains a fill-in-the-blank blank (usually shown as a run of underscores, e.g.
 "______", or a LaTeX placeholder like "$\\_\\_\\_\\_$", in a "which choice completes the text" style
 question), preserve it verbatim as a run of underscores in "prompt_text" — never replace it with an

@@ -153,6 +153,22 @@ def check_fixture(manifest: dict) -> list[str]:
     if manifest.get("expects_table") and not any("<table>" in q.prompt_text for q in questions):
         failures.append("expected at least one <table> block in a question's prompt_text, found none")
 
+    # A worksheet with shared-passage reading-comprehension questions (one
+    # passage, several independently-numbered questions about it) needs the
+    # full passage repeated into every one of those questions' own
+    # prompt_text — confirmed via a real worksheet that this can silently
+    # fail for every question in every passage group at once, leaving only
+    # the bare question stem. A short min length is a cheap, reliable tell:
+    # a bare stem with no passage is a fraction of the length of one with it.
+    min_len = manifest.get("min_prompt_text_length")
+    if min_len is not None:
+        for q in questions:
+            if len(q.prompt_text) < min_len:
+                failures.append(
+                    f"prompt_text only {len(q.prompt_text)} chars (expected >= {min_len}, likely missing "
+                    f"its shared passage): {q.prompt_text[:60]!r}"
+                )
+
     return failures
 
 

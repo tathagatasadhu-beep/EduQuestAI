@@ -17,6 +17,7 @@
     "name": "grade3_reading_workbook",
     "mathpix_file": "grade3_reading_mathpix.md",
     "expected_question_count": 30,
-    "expects_table": false
+    "expects_table": false,
+    "min_prompt_text_length": 300
   }
 ]
