@@ -14,10 +14,10 @@ export default async function QuizPage({
   searchParams,
 }: {
   params: Promise<{ studentId: string; topicId: string }>;
-  searchParams: Promise<{ mode?: string; filter?: string }>;
+  searchParams: Promise<{ mode?: string; filter?: string; pdf_id?: string }>;
 }) {
   const { studentId, topicId } = await params;
-  const { mode, filter } = await searchParams;
+  const { mode, filter, pdf_id: pdfId } = await searchParams;
   const token = await getStudentToken();
   if (!token) redirect("/student/login");
 
@@ -54,6 +54,7 @@ export default async function QuizPage({
           studentId={studentId}
           topicId={topicId}
           filter={sessionFilter}
+          pdfId={pdfId}
           initialXpTotal={me.xp_total}
           initialStreakDays={me.streak_days}
         />

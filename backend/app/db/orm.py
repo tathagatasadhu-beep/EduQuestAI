@@ -101,6 +101,10 @@ class Pdf(Base):
     status: Mapped[str] = mapped_column(String, default="pending")
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content_type: Mapped[str] = mapped_column(String, default="practice")
+    # Optional parent-set display label ("Chapter 2", "Unit 3: Vocabulary") so
+    # the student's Practice dropdown can show something cleaner than a raw
+    # filename — falls back to original_name when null (see migration 008).
+    module_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)

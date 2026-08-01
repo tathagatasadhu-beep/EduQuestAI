@@ -246,12 +246,15 @@ async def next_question(
 async def list_questions(
     topic_id: UUID,
     filter: str = "all",
+    pdf_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
     student: dict = Depends(get_current_student),
 ):
     """Powers the new fixed-list practice session (sidebar of question pills) —
     unlike next-question, this returns the *whole* matching set up front so the
-    frontend can track progress through a known-size batch."""
+    frontend can track progress through a known-size batch. Optional pdf_id
+    narrows that batch to one chapter/module (one PDF's questions) instead of
+    every worksheet ever uploaded into the topic — see GET /api/pdfs/modules."""
     if filter not in QUESTION_FILTERS:
         raise HTTPException(status_code=400, detail="filter must be one of: all, missed_1st, missed_2nd.")
 
@@ -261,6 +264,8 @@ async def list_questions(
     stmt = _exclude_theory_pdf_questions(
         select(Question).where(Question.topic_id == topic_id, Question.is_active.is_(True))
     )
+    if pdf_id is not None:
+        stmt = stmt.where(Question.pdf_id == pdf_id)
     if filter == "missed_1st":
         stmt = stmt.join(Attempt, Attempt.question_id == Question.id).where(
             Attempt.student_id == student_id, Attempt.attempt_number == 1, Attempt.is_correct.is_(False)

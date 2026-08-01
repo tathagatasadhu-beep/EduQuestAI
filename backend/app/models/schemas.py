@@ -203,6 +203,9 @@ class PdfOut(BaseModel):
     question_count: int
     uploaded_at: datetime
     topics: list[PdfTopicOut] = []
+    # Parent-set display label for the student's Practice chapter/module
+    # picker — None means "use original_name" (see Pdf.module_label).
+    module_label: Optional[str] = None
 
 
 class PdfUpdate(BaseModel):
@@ -211,6 +214,15 @@ class PdfUpdate(BaseModel):
     # PDF a topic at all, since it produces no extracted questions and
     # therefore no question-derived topic link. Left untouched when omitted.
     topic_id: Optional[UUID] = None
+    # Left untouched when omitted (None); an empty string explicitly clears
+    # it back to the original_name fallback — see update_pdf in pdfs.py.
+    module_label: Optional[str] = None
+
+
+class PdfModuleOut(BaseModel):
+    id: UUID
+    label: str
+    question_count: int
 
 
 class TheoryPdfOut(BaseModel):

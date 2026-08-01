@@ -20,12 +20,16 @@ export default function PracticeSessionRunner({
   studentId,
   topicId,
   filter,
+  pdfId,
   initialXpTotal,
   initialStreakDays,
 }: {
   studentId: string;
   topicId: string;
   filter: QuestionFilter;
+  // Scopes the session to one chapter/module (one PDF's questions) instead
+  // of every worksheet ever uploaded into the topic — see PracticeSelector.
+  pdfId?: string;
   initialXpTotal: number;
   initialStreakDays: number;
 }) {
@@ -40,7 +44,8 @@ export default function PracticeSessionRunner({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetching on mount/topic/filter change is intentional
     setLoading(true);
     setError(null);
-    fetch(`/api/quiz/questions?topic_id=${topicId}&filter=${filter}`)
+    const pdfParam = pdfId ? `&pdf_id=${pdfId}` : "";
+    fetch(`/api/quiz/questions?topic_id=${topicId}&filter=${filter}${pdfParam}`)
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Couldn't load questions for this topic.");
@@ -53,7 +58,7 @@ export default function PracticeSessionRunner({
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load questions for this topic."))
       .finally(() => setLoading(false));
-  }, [topicId, filter]);
+  }, [topicId, filter, pdfId]);
 
   const question = questions && currentIndex < questions.length ? questions[currentIndex] : null;
   const correctCount = Object.values(answeredMap).filter(Boolean).length;

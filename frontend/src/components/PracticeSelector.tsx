@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AssignedSubject, QuestionFilter } from "@/lib/api";
+import type { AssignedSubject, PdfModule, QuestionFilter } from "@/lib/api";
 
 const FILTERS: { value: QuestionFilter; label: string }[] = [
   { value: "all", label: "All questions" },
@@ -21,8 +21,21 @@ export default function PracticeSelector({
   const [subjectId, setSubjectId] = useState("");
   const [topicId, setTopicId] = useState("");
   const [filter, setFilter] = useState<QuestionFilter>("all");
+  const [modules, setModules] = useState<PdfModule[]>([]);
+  const [pdfId, setPdfId] = useState("");
 
   const topics = useMemo(() => subjects.find((s) => s.id === subjectId)?.topics ?? [], [subjects, subjectId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting for a fresh fetch on topic change is intentional
+    setModules([]);
+    setPdfId("");
+    if (!topicId) return;
+    fetch(`/api/pdfs/modules?topic_id=${topicId}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: PdfModule[]) => setModules(data))
+      .catch(() => setModules([]));
+  }, [topicId]);
 
   function handleSubjectChange(next: string) {
     setSubjectId(next);
@@ -31,7 +44,8 @@ export default function PracticeSelector({
 
   function handleStart() {
     if (!topicId) return;
-    router.push(`/student/${studentId}/quiz/${topicId}?mode=session&filter=${filter}`);
+    const pdfParam = pdfId ? `&pdf_id=${pdfId}` : "";
+    router.push(`/student/${studentId}/quiz/${topicId}?mode=session&filter=${filter}${pdfParam}`);
   }
 
   const selectClass =
@@ -63,6 +77,22 @@ export default function PracticeSelector({
           </option>
         ))}
       </select>
+
+      {modules.length >= 2 && (
+        <>
+          <label className="mt-4 mb-1.5 block text-xs font-semibold tracking-wide text-sky-400 uppercase">
+            Chapter / Module
+          </label>
+          <select className={selectClass} value={pdfId} onChange={(e) => setPdfId(e.target.value)}>
+            <option value="">All chapters</option>
+            {modules.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label} ({m.question_count})
+              </option>
+            ))}
+          </select>
+        </>
+      )}
 
       <label className="mt-4 mb-1.5 block text-xs font-semibold tracking-wide text-sky-400 uppercase">
         Which questions?

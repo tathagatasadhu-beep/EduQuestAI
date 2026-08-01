@@ -138,7 +138,12 @@ export type PdfOut = {
   question_count: number;
   uploaded_at: string;
   topics: PdfTopic[];
+  // Parent-set display label for the student's Practice chapter/module
+  // picker — null means "use original_name" (see GET /api/pdfs/modules).
+  module_label: string | null;
 };
+
+export type PdfModule = { id: string; label: string; question_count: number };
 
 export const api = {
   // --- auth ---
@@ -253,9 +258,10 @@ export const api = {
   // --- quiz ---
   nextQuestion: (token: string, topicId: string) =>
     request<QuestionOut>(`/api/quiz/next-question?topic_id=${encodeURIComponent(topicId)}`, { token }),
-  listQuestions: (token: string, topicId: string, filter: QuestionFilter) =>
+  listQuestions: (token: string, topicId: string, filter: QuestionFilter, pdfId?: string) =>
     request<QuestionOut[]>(
-      `/api/quiz/questions?topic_id=${encodeURIComponent(topicId)}&filter=${filter}`,
+      `/api/quiz/questions?topic_id=${encodeURIComponent(topicId)}&filter=${filter}` +
+        (pdfId ? `&pdf_id=${encodeURIComponent(pdfId)}` : ""),
       { token }
     ),
   revealAnswer: (token: string, questionId: string) =>
@@ -297,7 +303,11 @@ export const api = {
   pdfStatus: (token: string, pdfId: string) =>
     request<PdfUploadOut>(`/api/pdfs/${pdfId}/status`, { token }),
   listPdfs: (token: string) => request<PdfOut[]>("/api/pdfs", { token }),
-  updatePdf: (token: string, pdfId: string, data: { content_type: "theory" | "practice"; topic_id?: string }) =>
+  updatePdf: (
+    token: string,
+    pdfId: string,
+    data: { content_type: "theory" | "practice"; topic_id?: string; module_label?: string }
+  ) =>
     request<PdfOut>(`/api/pdfs/${pdfId}`, {
       method: "PATCH",
       token,
@@ -305,6 +315,8 @@ export const api = {
       body: JSON.stringify(data),
     }),
   deletePdf: (token: string, pdfId: string) => request<void>(`/api/pdfs/${pdfId}`, { method: "DELETE", token }),
+  listPdfModules: (token: string, topicId: string) =>
+    request<PdfModule[]>(`/api/pdfs/modules?topic_id=${encodeURIComponent(topicId)}`, { token }),
   getTheoryPdfs: (token: string, scope: { subjectId: string } | { topicId: string }) =>
     request<TheoryPdf[]>(
       "subjectId" in scope

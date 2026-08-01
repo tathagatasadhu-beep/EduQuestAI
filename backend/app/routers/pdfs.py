@@ -34,6 +34,7 @@ from app.core.supabase_client import QUESTION_IMAGES_BUCKET, WORKSHEETS_BUCKET, 
 from app.db.orm import AnswerKey, Pdf, Question, StudentAssignment, Subject, Topic
 from app.db.session import SessionLocal, get_db
 from app.models.schemas import (
+    PdfModuleOut,
     PdfOut,
     PdfTopicOut,
     PdfUpdate,
@@ -227,7 +228,7 @@ async def list_pdfs(
             error_message=pdf.error_message, content_type=pdf.content_type,
             subject_id=pdf.subject_id, subject_name=subject_name,
             question_count=question_count, uploaded_at=pdf.uploaded_at,
-            topics=topics_by_pdf.get(pdf.id, []),
+            topics=topics_by_pdf.get(pdf.id, []), module_label=pdf.module_label,
         )
         for pdf, subject_name, question_count in rows
     ]
@@ -288,6 +289,42 @@ async def list_theory_pdfs_for_student(
     return results
 
 
+@router.get("/modules", response_model=list[PdfModuleOut])
+async def list_pdf_modules(
+    topic_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    student: dict = Depends(get_current_student),
+):
+    """Powers the Practice tab's chapter/module picker — one entry per
+    practice-content-type PDF under this topic that has at least one active
+    question, so a student can isolate one worksheet's questions instead of
+    every PDF ever uploaded into the topic pooling together (see migration
+    008). `label` falls back to the PDF's filename when no module_label was
+    set, so already-uploaded worksheets work with zero parent action."""
+    # Pdf.topic_id is only ever set for theory PDFs (manual tagging, since
+    # those produce no extracted questions to derive a topic from) — a
+    # practice PDF's topic association lives on its Questions instead, so
+    # filter by Question.topic_id here, not Pdf.topic_id.
+    rows = (
+        await db.execute(
+            select(Pdf, func.count(Question.id))
+            .join(Question, Question.pdf_id == Pdf.id)
+            .where(
+                Question.topic_id == topic_id,
+                Pdf.content_type == "practice",
+                Pdf.deleted_at.is_(None),
+                Question.is_active.is_(True),
+            )
+            .group_by(Pdf.id)
+            .order_by(Pdf.uploaded_at.asc())
+        )
+    ).all()
+    return [
+        PdfModuleOut(id=pdf.id, label=pdf.module_label or pdf.original_name, question_count=count)
+        for pdf, count in rows
+    ]
+
+
 async def _get_owned_pdf_or_404(db: AsyncSession, pdf_id: UUID, parent_id: UUID) -> Pdf:
     pdf = (
         await db.execute(
@@ -313,6 +350,8 @@ async def update_pdf(
         if topic is None or (pdf.subject_id is not None and topic.subject_id != pdf.subject_id):
             raise HTTPException(status_code=400, detail="Topic not found in this worksheet's subject.")
         pdf.topic_id = payload.topic_id
+    if payload.module_label is not None:
+        pdf.module_label = payload.module_label.strip() or None
     await db.commit()
     await db.refresh(pdf)
 
@@ -331,7 +370,7 @@ async def update_pdf(
         error_message=pdf.error_message, content_type=pdf.content_type,
         subject_id=pdf.subject_id, subject_name=subject_name,
         question_count=question_count, uploaded_at=pdf.uploaded_at,
-        topics=topics,
+        topics=topics, module_label=pdf.module_label,
     )
 
 

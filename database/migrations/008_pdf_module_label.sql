@@ -1,0 +1,14 @@
+-- EduQuestAI: parent feedback -- uploading a second worksheet into a topic
+-- that already had questions pooled every PDF's questions together in the
+-- Practice tab, with no way for the student to isolate just the new
+-- worksheet's questions from ones they'd already finished. A PDF is already
+-- the natural chapter/module unit (one upload = one logical unit), so this
+-- just gives it an optional display label; GET /api/pdfs/modules and
+-- GET /api/quiz/questions?pdf_id= (backend/app/routers/pdfs.py,
+-- quiz.py) let the student filter Practice down to one PDF's worth.
+--
+-- Nullable, no backfill -- existing rows fall back to Pdf.original_name as
+-- the display label in application code, so already-uploaded worksheets
+-- (including the two "Words in Context" PDFs that prompted this) work with
+-- the new Practice dropdown immediately, no parent action required.
+alter table pdfs add column module_label text;

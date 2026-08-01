@@ -68,6 +68,7 @@ export default function LibraryManager({
   const [newTopicName, setNewTopicName] = useState("");
   const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [editingModuleLabelId, setEditingModuleLabelId] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -263,6 +264,23 @@ export default function LibraryManager({
     });
   }
 
+  // Lets the student's Practice chapter/module dropdown show something
+  // cleaner than a raw filename — empty string clears back to that fallback
+  // (see backend/app/routers/pdfs.py::update_pdf).
+  async function setPdfModuleLabel(pdf: PdfOut, label: string) {
+    setBusyId(pdf.id);
+    await guarded(async () => {
+      const updated = await call<PdfOut>(`/api/pdfs/${pdf.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content_type: pdf.content_type, module_label: label }),
+      });
+      setPdfs((prev) => prev.map((p) => (p.id === pdf.id ? updated : p)));
+      setEditingModuleLabelId(null);
+    });
+    setBusyId(null);
+  }
+
   // The only way a theory PDF (which never gets questions/topics extracted)
   // ends up under a topic at all — tags the worksheet directly.
   async function assignPdfTopic(pdf: PdfOut, topicId: string) {
@@ -294,6 +312,7 @@ export default function LibraryManager({
         question_count: 0,
         uploaded_at: new Date().toISOString(),
         topics: [],
+        module_label: null,
       },
       ...prev,
     ]);
@@ -626,7 +645,13 @@ export default function LibraryManager({
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <PdfCell pdf={row.pdf} />
+                        <PdfCell
+                          pdf={row.pdf}
+                          editingModuleLabel={editingModuleLabelId === row.pdf.id}
+                          onEditModuleLabel={() => setEditingModuleLabelId(row.pdf.id)}
+                          onCancelModuleLabel={() => setEditingModuleLabelId(null)}
+                          onSaveModuleLabel={(label) => setPdfModuleLabel(row.pdf, label)}
+                        />
                       </td>
                       <td className="px-4 py-3">
                         <select
@@ -727,7 +752,19 @@ export default function LibraryManager({
   );
 }
 
-function PdfCell({ pdf }: { pdf: PdfOut }) {
+function PdfCell({
+  pdf,
+  editingModuleLabel,
+  onEditModuleLabel,
+  onCancelModuleLabel,
+  onSaveModuleLabel,
+}: {
+  pdf: PdfOut;
+  editingModuleLabel: boolean;
+  onEditModuleLabel: () => void;
+  onCancelModuleLabel: () => void;
+  onSaveModuleLabel: (label: string) => void;
+}) {
   const meta = STATUS_META[pdf.status] ?? { label: pdf.status, icon: Loader2, className: "text-zinc-500" };
   const StatusIcon = meta.icon;
   const spinning = pdf.status === "pending" || pdf.status === "processing";
@@ -740,7 +777,80 @@ function PdfCell({ pdf }: { pdf: PdfOut }) {
         {pdf.status === "extracted" && ` · ${pdf.question_count} question${pdf.question_count === 1 ? "" : "s"}`}
       </p>
       {pdf.status === "failed" && pdf.error_message && <p className="text-xs text-rose-500">{pdf.error_message}</p>}
+      <EditableModuleLabel
+        pdf={pdf}
+        editing={editingModuleLabel}
+        onEdit={onEditModuleLabel}
+        onCancel={onCancelModuleLabel}
+        onSave={onSaveModuleLabel}
+      />
     </div>
+  );
+}
+
+function EditableModuleLabel({
+  pdf,
+  editing,
+  onEdit,
+  onCancel,
+  onSave,
+}: {
+  pdf: PdfOut;
+  editing: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: (label: string) => void;
+}) {
+  const [value, setValue] = useState(pdf.module_label ?? "");
+
+  if (editing) {
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(value.trim());
+        }}
+        className="mt-1 flex items-center gap-1"
+      >
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="e.g. Chapter 2"
+          className="w-32 rounded border border-zinc-300 px-1.5 py-0.5 text-xs focus:border-brand-400 focus:outline-none"
+        />
+        <button type="submit" className="text-xs font-semibold text-brand-600 hover:text-brand-700">
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setValue(pdf.module_label ?? "");
+            onCancel();
+          }}
+          className="text-xs text-zinc-400 hover:text-zinc-600"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <span className="group mt-1 flex items-center gap-1 text-xs">
+      {pdf.module_label ? (
+        <span className="rounded-full bg-sky-50 px-2 py-0.5 font-medium text-sky-600">{pdf.module_label}</span>
+      ) : (
+        <span className="text-zinc-400 italic">No chapter/module label</span>
+      )}
+      <button
+        title="Edit chapter/module label"
+        onClick={onEdit}
+        className="text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-brand-600"
+      >
+        <Pencil className="h-3 w-3" strokeWidth={2} />
+      </button>
+    </span>
   );
 }
 
