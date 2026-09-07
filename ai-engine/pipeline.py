@@ -1033,6 +1033,24 @@ _TEXT_OVERLAP_REJECT_RATIO = 0.5  # a region mostly covered by text blocks is de
 _WHOLE_PAGE_REJECT_RATIO = 0.85  # a region this close to the full page is a false-positive umbrella merge
 _RENDER_DPI = 150
 
+# A real single diagram in these worksheets is well under this in either
+# dimension — confirmed via a real worksheet upload where unbounded
+# clustering produced a crop spanning the page title through 3 separate
+# questions (including the answer column), matched to and shown for one of
+# them. Enforced DURING merging (a merge that would exceed the cap is
+# skipped, leaving both sides as separate clusters), not just filtered
+# afterward — filtering only after the fact is too late: the smaller real
+# regions have already been irreversibly unioned away by then.
+_MAX_REGION_DIMENSION_PT = 280.0
+
+# Same idea, checked again on the actual rendered pixel dimensions right
+# before a crop is offered to the vision model — see the pixmap-rendering
+# step in _apply_missing_diagram_fallback. (280pt + 2×padding) at
+# _RENDER_DPI ≈ 608px; generously rounded up, not tightened, since this is
+# meant to catch a gross failure, not to be the primary size constraint —
+# that's _MAX_REGION_DIMENSION_PT's job, enforced earlier, during clustering.
+_MAX_REGION_PIXELS = 700
+
 
 def _best_matching_page(prompt_text: str, page_texts: list[str]) -> int | None:
     """Which page's plain text a question's own text overlaps with most —
@@ -1065,22 +1083,38 @@ def _merge_rects(
 ) -> list[tuple[float, float, float, float]]:
     """Iteratively unions nearby/overlapping rects into clusters — a real
     diagram is normally dozens of individual vector-drawing operations, not
-    one shape, so they need grouping before they're a usable region."""
-    clusters = list(rects)
+    one shape, so they need grouping before they're a usable region.
+
+    Never lets a cluster grow past _MAX_REGION_DIMENSION_PT in either
+    dimension: an individual rect already over the cap (a page-spanning
+    background/border shape, for instance) is dropped before clustering
+    even starts, and a merge that would push a cluster over the cap is
+    skipped — the two rects are left as separate clusters rather than
+    unioned. This is what actually stops runaway growth (a long chain of
+    small, individually-plausible elements each within `gap` of the next
+    can otherwise bridge unrelated content all the way down a page), not
+    just a size check applied after all merging is already done."""
+    clusters = [
+        r for r in rects
+        if (r[2] - r[0]) <= _MAX_REGION_DIMENSION_PT and (r[3] - r[1]) <= _MAX_REGION_DIMENSION_PT
+    ]
     merged = True
     while merged:
         merged = False
         for i in range(len(clusters)):
             for j in range(i + 1, len(clusters)):
-                if _rects_overlap_or_close(clusters[i], clusters[j], gap):
-                    x0 = min(clusters[i][0], clusters[j][0])
-                    y0 = min(clusters[i][1], clusters[j][1])
-                    x1 = max(clusters[i][2], clusters[j][2])
-                    y1 = max(clusters[i][3], clusters[j][3])
-                    clusters[i] = (x0, y0, x1, y1)
-                    del clusters[j]
-                    merged = True
-                    break
+                if not _rects_overlap_or_close(clusters[i], clusters[j], gap):
+                    continue
+                x0 = min(clusters[i][0], clusters[j][0])
+                y0 = min(clusters[i][1], clusters[j][1])
+                x1 = max(clusters[i][2], clusters[j][2])
+                y1 = max(clusters[i][3], clusters[j][3])
+                if (x1 - x0) > _MAX_REGION_DIMENSION_PT or (y1 - y0) > _MAX_REGION_DIMENSION_PT:
+                    continue  # would exceed the cap — leave these two separate
+                clusters[i] = (x0, y0, x1, y1)
+                del clusters[j]
+                merged = True
+                break
             if merged:
                 break
     return clusters
@@ -1152,6 +1186,12 @@ above") and some candidate images cropped from the same page. For each question,
 of the images is its diagram — match strictly: only report a match you're genuinely confident about, never
 guess or pick the "closest" image if none of them plausibly matches. A question can be left out of your
 answer entirely if none of the images belong to it, and an image can belong to at most one question.
+
+The candidate images come from an automated best-effort crop of the page and can occasionally be a bad
+crop — spanning more than one question, including a page title/header, an answer key column, or multiple
+diagrams at once instead of a single clean figure. Never match a question to an image like that, even if
+its diagram is technically visible somewhere inside it — a bad crop is worse than no image at all, so treat
+"none of these are usable" as the correct, expected answer whenever every candidate image looks like that.
 
 Respond with a JSON object of exactly this shape, no prose:
 {"matches": [{"question_index": 0, "image_index": 1}]}
@@ -1237,7 +1277,20 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
             regions = _detect_diagram_regions(page)
             if not regions:
                 continue
-            crops = [page.get_pixmap(clip=r, dpi=_RENDER_DPI).tobytes("png") for r in regions]
+            pixmaps = [page.get_pixmap(clip=r, dpi=_RENDER_DPI) for r in regions]
+            # Final, independent safety net on the actual rendered pixel
+            # size — redundant with _MAX_REGION_DIMENSION_PT's point-based
+            # cap during clustering, deliberately so: this checks the real
+            # rendered output rather than the geometry math that produced
+            # it, so it still catches a bad crop even if that earlier cap
+            # has a bug this code path can't be tested locally enough to
+            # rule out.
+            crops = [
+                pm.tobytes("png") for pm in pixmaps
+                if pm.width <= _MAX_REGION_PIXELS and pm.height <= _MAX_REGION_PIXELS
+            ]
+            if not crops:
+                continue
             questions_text = [q.prompt_text for _, q in page_candidates]
             matches = _match_diagrams_for_page(client, questions_text, crops)
             for local_qi, image_index in matches:
