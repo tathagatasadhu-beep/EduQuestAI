@@ -989,10 +989,271 @@ def extract_questions(ocr_text: str, secondary_ocr_text: str | None = None) -> E
     return ExtractionResult(subject_guess=subject_guess, questions=questions, ocr_text=ocr_text)
 
 
+# --- Missing-diagram fallback ------------------------------------------------
+#
+# Mathpix's own diagram cropping works by rendering a region of the page — it
+# can and does miss real figures, especially ones drawn with vector line/curve
+# commands rather than embedded as a raster image. Confirmed on a real
+# worksheet ("Lines, Angles, and Triangles 2~Key.pdf"): 4 of 13 questions said
+# "the figure above/shown" in their own text but got no image, while 3 others
+# in the same document worked fine. Document AI (the text-only cross-check)
+# can't help here at all — it never does image extraction.
+#
+# This is a second, independent attempt specifically at that gap: render each
+# page ourselves (PyMuPDF — the only practical option that rasterizes vector
+# content the same way Mathpix does, unlike pypdf's raster-object-only
+# extraction used elsewhere in this file for Document AI's page-splitting),
+# detect probable diagram regions from the page's own drawing geometry, and
+# use one vision-capable model call per page to match a region to the
+# question that needs it. Only runs when there's an actual gap to fill — zero
+# added cost on the large majority of already-working questions/worksheets.
+# Every step here is best-effort: PyMuPDF has no wheel for this project's
+# ARM64 Windows dev machine (same situation as asyncpg — works on Render's
+# Linux x86_64, can only be verified there), so this whole subsystem is new
+# and unproven in a way the rest of the pipeline isn't; it's wrapped so a
+# failure anywhere in it can never take down the already-working extraction
+# it runs after.
+
+_DIAGRAM_REFERENCE_PATTERN = re.compile(
+    r"\b(figure|diagram|graph|chart)\b[^.?!]{0,30}\b(above|below|shown|given|depicted|illustrated)\b"
+    r"|\b(shown|given|depicted|illustrated)\b[^.?!]{0,15}\b(above|below)\b"
+    # Catches "Triangle ABC and triangle DEF are shown." — a figure
+    # reference with no "figure"/"above"/"below" wording at all, just a bare
+    # "is/are shown" — confirmed via a real worksheet where this exact
+    # phrasing was the only diagram cue for a question missing its image.
+    r"|\b(is|are)\s+shown\b",
+    re.IGNORECASE,
+)
+
+_MIN_REGION_AREA_PT = 400.0  # ~20x20pt — filters out stray marks/dots
+_MIN_REGION_DIMENSION_PT = 15.0  # filters out thin single rule lines (table borders, underlines)
+_MAX_REGIONS_PER_PAGE = 6
+_REGION_PADDING_PT = 6.0
+_TEXT_OVERLAP_REJECT_RATIO = 0.5  # a region mostly covered by text blocks is decorated text, not a figure
+_WHOLE_PAGE_REJECT_RATIO = 0.85  # a region this close to the full page is a false-positive umbrella merge
+_RENDER_DPI = 150
+
+
+def _best_matching_page(prompt_text: str, page_texts: list[str]) -> int | None:
+    """Which page's plain text a question's own text overlaps with most —
+    used to scope the (expensive) per-page region-detection + vision call to
+    only the page a candidate question actually came from."""
+    snippet = _normalize_for_dedupe(prompt_text)[:120]
+    if not snippet:
+        return None
+    best_index, best_ratio = None, 0.0
+    for i, page_text in enumerate(page_texts):
+        ratio = difflib.SequenceMatcher(None, snippet, _normalize_for_dedupe(page_text)[:4000]).ratio()
+        if ratio > best_ratio:
+            best_index, best_ratio = i, ratio
+    return best_index if best_ratio > 0.15 else None
+
+
+def _rects_overlap_or_close(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float], gap: float
+) -> bool:
+    """True if two (x0, y0, x1, y1) rects overlap, or are within `gap` points
+    of each other — used to cluster a diagram's individual line/curve
+    segments (which never share one literal bounding box) into one region."""
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return not (ax0 - gap > bx1 or bx0 - gap > ax1 or ay0 - gap > by1 or by0 - gap > ay1)
+
+
+def _merge_rects(
+    rects: list[tuple[float, float, float, float]], gap: float = 8.0
+) -> list[tuple[float, float, float, float]]:
+    """Iteratively unions nearby/overlapping rects into clusters — a real
+    diagram is normally dozens of individual vector-drawing operations, not
+    one shape, so they need grouping before they're a usable region."""
+    clusters = list(rects)
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                if _rects_overlap_or_close(clusters[i], clusters[j], gap):
+                    x0 = min(clusters[i][0], clusters[j][0])
+                    y0 = min(clusters[i][1], clusters[j][1])
+                    x1 = max(clusters[i][2], clusters[j][2])
+                    y1 = max(clusters[i][3], clusters[j][3])
+                    clusters[i] = (x0, y0, x1, y1)
+                    del clusters[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return clusters
+
+
+def _detect_diagram_regions(page) -> list:
+    """Finds probable diagram regions on a page from its own vector-drawing
+    and embedded-image geometry — Mathpix's own successful crops prove these
+    worksheets DO have real figures, so when a page has candidate questions
+    with no image, this is what looks for the figure a text-only OCR read
+    can't provide on its own. Returns a list of fitz.Rect."""
+    import fitz  # local import — this whole module is optional/best-effort, see _apply_missing_diagram_fallback
+
+    page_rect = page.rect
+    raw_rects: list[tuple[float, float, float, float]] = []
+    for d in page.get_drawings():
+        r = d["rect"]
+        raw_rects.append((r.x0, r.y0, r.x1, r.y1))
+    for info in page.get_image_info():
+        r = info["bbox"]
+        raw_rects.append((r[0], r[1], r[2], r[3]))
+
+    # Drop degenerate single rules (table borders, underlines) before
+    # clustering — these would otherwise glue two unrelated blocks together.
+    filtered = [
+        r for r in raw_rects
+        if (r[2] - r[0]) >= _MIN_REGION_DIMENSION_PT and (r[3] - r[1]) >= _MIN_REGION_DIMENSION_PT
+    ]
+    if not filtered:
+        return []
+
+    clusters = _merge_rects(filtered)
+    # get_text("blocks") returns text (block_type 0), image (1), AND vector
+    # (3) blocks in one list — a real diagram region overlaps 100% with its
+    # own image/vector block entry, so including those here would make every
+    # genuine diagram reject itself as "text overlap." Keep only type 0.
+    text_blocks = [b[:4] for b in page.get_text("blocks") if b[6] == 0]
+
+    def text_overlap_ratio(rect: tuple[float, float, float, float]) -> float:
+        area = max((rect[2] - rect[0]) * (rect[3] - rect[1]), 1.0)
+        covered = 0.0
+        for tb in text_blocks:
+            ix0, iy0 = max(rect[0], tb[0]), max(rect[1], tb[1])
+            ix1, iy1 = min(rect[2], tb[2]), min(rect[3], tb[3])
+            if ix1 > ix0 and iy1 > iy0:
+                covered += (ix1 - ix0) * (iy1 - iy0)
+        return covered / area
+
+    page_area = page_rect.width * page_rect.height
+    scored_regions = []
+    for r in clusters:
+        area = (r[2] - r[0]) * (r[3] - r[1])
+        if area < _MIN_REGION_AREA_PT or area / page_area > _WHOLE_PAGE_REJECT_RATIO:
+            continue
+        if text_overlap_ratio(r) > _TEXT_OVERLAP_REJECT_RATIO:
+            continue
+        padded = fitz.Rect(
+            r[0] - _REGION_PADDING_PT, r[1] - _REGION_PADDING_PT, r[2] + _REGION_PADDING_PT, r[3] + _REGION_PADDING_PT
+        ) & page_rect
+        scored_regions.append((area, padded))
+
+    scored_regions.sort(key=lambda t: t[0], reverse=True)
+    return [r for _, r in scored_regions[:_MAX_REGIONS_PER_PAGE]]
+
+
+_DIAGRAM_MATCH_SYSTEM_PROMPT = """You are matching worksheet questions to the diagram images that belong to
+them. You'll be given some question texts (each already known to reference a diagram, e.g. "the figure
+above") and some candidate images cropped from the same page. For each question, decide whether exactly one
+of the images is its diagram — match strictly: only report a match you're genuinely confident about, never
+guess or pick the "closest" image if none of them plausibly matches. A question can be left out of your
+answer entirely if none of the images belong to it, and an image can belong to at most one question.
+
+Respond with a JSON object of exactly this shape, no prose:
+{"matches": [{"question_index": 0, "image_index": 1}]}
+"""
+
+
+def _match_diagrams_for_page(client: OpenAI, questions_text: list[str], images: list[bytes]) -> list[tuple[int, int]]:
+    """One vision call per page: which candidate image (if any) belongs to
+    which candidate question. Returns (question_index, image_index) pairs
+    indexing into the lists passed in. Never raises — a failed/malformed
+    response just means no matches for this page, same as if Mathpix's own
+    detection had missed it too."""
+    content: list[dict] = [
+        {
+            "type": "text",
+            "text": "\n\n".join(f"Question {i}: {t}" for i, t in enumerate(questions_text))
+            + "\n\nMatch each question above to one of the images below, if any.",
+        }
+    ]
+    for i, img_bytes in enumerate(images):
+        b64 = base64.b64encode(img_bytes).decode("ascii")
+        content.append({"type": "text", "text": f"Image {i}:"})
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+
+    try:
+        response = client.chat.completions.create(
+            model=EXTRACTION_MODEL,
+            response_format={"type": "json_object"},
+            temperature=0,
+            messages=[
+                {"role": "system", "content": _DIAGRAM_MATCH_SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
+        )
+        raw = json.loads(response.choices[0].message.content)
+        pairs = []
+        for m in raw.get("matches", []):
+            qi, ii = m.get("question_index"), m.get("image_index")
+            if isinstance(qi, int) and isinstance(ii, int) and 0 <= qi < len(questions_text) and 0 <= ii < len(images):
+                pairs.append((qi, ii))
+        return pairs
+    except Exception:
+        return []
+
+
+def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) -> None:
+    """Best-effort, entirely additive — see the module comment above this
+    section. Any failure here (a malformed PDF, PyMuPDF being unavailable, an
+    API error) just leaves affected questions exactly as they already were,
+    the same as if this function didn't exist."""
+    candidates = [
+        (i, q) for i, q in enumerate(result.questions)
+        if q.image_url is None and _DIAGRAM_REFERENCE_PATTERN.search(q.prompt_text)
+    ]
+    if not candidates:
+        return
+
+    try:
+        import fitz
+    except Exception:
+        return
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        page_texts = [page.get_text() for page in doc]
+    except Exception:
+        return
+
+    by_page: dict[int, list[tuple[int, ExtractedQuestion]]] = {}
+    for i, q in candidates:
+        page_index = _best_matching_page(q.prompt_text, page_texts)
+        if page_index is not None:
+            by_page.setdefault(page_index, []).append((i, q))
+
+    for page_index, page_candidates in by_page.items():
+        # Isolated per page, not one try/except around the whole loop — a
+        # problem on one page (e.g. a degenerate clip rect) must not abort
+        # processing for every other page too, especially important here
+        # since this whole code path is unproven until it runs for real.
+        try:
+            page = doc[page_index]
+            regions = _detect_diagram_regions(page)
+            if not regions:
+                continue
+            crops = [page.get_pixmap(clip=r, dpi=_RENDER_DPI).tobytes("png") for r in regions]
+            questions_text = [q.prompt_text for _, q in page_candidates]
+            matches = _match_diagrams_for_page(client, questions_text, crops)
+            for local_qi, image_index in matches:
+                original_index = page_candidates[local_qi][0]
+                key = f"fallback://p{page_index}-r{image_index}.png"
+                result.images[key] = crops[image_index]
+                result.questions[original_index].image_url = key
+        except Exception:
+            continue
+
+
 def run_pipeline(pdf_bytes: bytes, filename: str) -> ExtractionResult:
     """Entry point called by the background job triggered from pdfs.upload_pdf."""
     ocr_text = ocr_pdf(pdf_bytes, filename)
     secondary_ocr_text = document_ai_ocr(pdf_bytes)
     result = extract_questions(ocr_text, secondary_ocr_text)
     result.images = _download_images(_extract_image_urls(ocr_text))
+    _apply_missing_diagram_fallback(pdf_bytes, result)
     return result
