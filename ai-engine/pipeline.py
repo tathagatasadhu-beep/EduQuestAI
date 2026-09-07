@@ -1043,28 +1043,23 @@ _RENDER_DPI = 150
 # regions have already been irreversibly unioned away by then.
 _MAX_REGION_DIMENSION_PT = 280.0
 
-# Same idea, checked again on the actual rendered pixel dimensions right
+# A second, independent check on the actual rendered pixel dimensions right
 # before a crop is offered to the vision model — see the pixmap-rendering
-# step in _apply_missing_diagram_fallback. (280pt + 2×padding) at
-# _RENDER_DPI ≈ 608px; generously rounded up, not tightened, since this is
-# meant to catch a gross failure, not to be the primary size constraint —
-# that's _MAX_REGION_DIMENSION_PT's job, enforced earlier, during clustering.
-_MAX_REGION_PIXELS = 700
-
-
-def _best_matching_page(prompt_text: str, page_texts: list[str]) -> int | None:
-    """Which page's plain text a question's own text overlaps with most —
-    used to scope the (expensive) per-page region-detection + vision call to
-    only the page a candidate question actually came from."""
-    snippet = _normalize_for_dedupe(prompt_text)[:120]
-    if not snippet:
-        return None
-    best_index, best_ratio = None, 0.0
-    for i, page_text in enumerate(page_texts):
-        ratio = difflib.SequenceMatcher(None, snippet, _normalize_for_dedupe(page_text)[:4000]).ratio()
-        if ratio > best_ratio:
-            best_index, best_ratio = i, ratio
-    return best_index if best_ratio > 0.15 else None
+# step in _apply_missing_diagram_fallback. NOT derived from
+# _MAX_REGION_DIMENSION_PT: that cap only applies to get_drawings()-based
+# (vector-clustered) regions — get_image_info()-based ones (a whole
+# question's content embedded as one raster image, confirmed common on a
+# real worksheet) are legitimately wider than that, up to ~540pt observed in
+# practice. Confirmed the hard way: an earlier, tighter value here (700,
+# derived from the old dimension cap before get_image_info() rects were
+# exempted from it) silently discarded every legitimate raster-image region
+# before it ever reached the vision model — the real regions rendered to
+# ~925px wide, comfortably past that cap. The area/whole-page-ratio checks
+# in _detect_diagram_regions are the actual primary defense against a
+# genuinely oversized crop (e.g. a full page embedded as one scan, ~1275px+
+# at this DPI); this is a redundant backstop, not the primary constraint,
+# so it should stay generous rather than tight.
+_MAX_REGION_PIXELS = 1200
 
 
 def _rects_overlap_or_close(
@@ -1125,28 +1120,52 @@ def _detect_diagram_regions(page) -> list:
     and embedded-image geometry — Mathpix's own successful crops prove these
     worksheets DO have real figures, so when a page has candidate questions
     with no image, this is what looks for the figure a text-only OCR read
-    can't provide on its own. Returns a list of fitz.Rect."""
+    can't provide on its own. Returns a list of fitz.Rect.
+
+    Two genuinely different kinds of source, handled differently — confirmed
+    by tracing a real worksheet locally (this dependency does have a wheel
+    for this project's dev machine after all, unlike asyncpg — see memory):
+    on that worksheet, get_drawings() found nothing but large page-layout
+    shapes (a header banner, table borders/column backgrounds — 8 of them,
+    all filtered out by the area/whole-page checks below already), and the
+    actual diagram was invisible to it entirely, because each question's
+    whole content block (diagram + text + options together) was embedded as
+    ONE raster image via get_image_info() instead — the PDF generator
+    flattened it, not us. So:
+    - get_drawings() rects get CLUSTERED (with _MAX_REGION_DIMENSION_PT
+      capping how large a cluster can grow) since a hand-drawn vector
+      diagram is normally dozens of separate small path segments that need
+      grouping into one region.
+    - get_image_info() rects are each already one atomic, individual object
+      the PDF generator placed — never clustered or dimension-capped (that
+      cap exists specifically to stop clustering from unboundedly growing a
+      region, which doesn't apply to an object that was never merged with
+      anything). The area/whole-page/text-overlap filters below are still
+      applied to these too, as the safety net against e.g. a whole page
+      embedded as one big scan.
+    """
     import fitz  # local import — this whole module is optional/best-effort, see _apply_missing_diagram_fallback
 
     page_rect = page.rect
-    raw_rects: list[tuple[float, float, float, float]] = []
-    for d in page.get_drawings():
-        r = d["rect"]
-        raw_rects.append((r.x0, r.y0, r.x1, r.y1))
-    for info in page.get_image_info():
-        r = info["bbox"]
-        raw_rects.append((r[0], r[1], r[2], r[3]))
 
-    # Drop degenerate single rules (table borders, underlines) before
-    # clustering — these would otherwise glue two unrelated blocks together.
-    filtered = [
-        r for r in raw_rects
+    drawing_rects = [(d["rect"].x0, d["rect"].y0, d["rect"].x1, d["rect"].y1) for d in page.get_drawings()]
+    filtered_drawing_rects = [
+        r for r in drawing_rects
         if (r[2] - r[0]) >= _MIN_REGION_DIMENSION_PT and (r[3] - r[1]) >= _MIN_REGION_DIMENSION_PT
     ]
-    if not filtered:
+    drawing_clusters = _merge_rects(filtered_drawing_rects) if filtered_drawing_rects else []
+
+    image_rects = [
+        (info["bbox"][0], info["bbox"][1], info["bbox"][2], info["bbox"][3])
+        for info in page.get_image_info()
+        if (info["bbox"][2] - info["bbox"][0]) >= _MIN_REGION_DIMENSION_PT
+        and (info["bbox"][3] - info["bbox"][1]) >= _MIN_REGION_DIMENSION_PT
+    ]
+
+    clusters = drawing_clusters + image_rects
+    if not clusters:
         return []
 
-    clusters = _merge_rects(filtered)
     # get_text("blocks") returns text (block_type 0), image (1), AND vector
     # (3) blocks in one list — a real diagram region overlaps 100% with its
     # own image/vector block entry, so including those here would make every
@@ -1241,7 +1260,23 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
     """Best-effort, entirely additive — see the module comment above this
     section. Any failure here (a malformed PDF, PyMuPDF being unavailable, an
     API error) just leaves affected questions exactly as they already were,
-    the same as if this function didn't exist."""
+    the same as if this function didn't exist.
+
+    Checks every page against the pool of still-unmatched candidates,
+    rather than first guessing which one page a question belongs to —
+    confirmed necessary via a real worksheet where every question's whole
+    content (diagram + text + options) was embedded as one raster image per
+    question, leaving page.get_text() with nothing but page chrome (~100
+    characters of title/header, no actual question text at all) to compare
+    against. A text-similarity page-locator is fundamentally unusable
+    against that — it isn't a tuning problem, there's no real text to find.
+    Trying every page is still bounded (worksheets are a handful of pages,
+    region-detection itself is free — pure geometry, no API cost — and the
+    pool shrinks to nothing once every candidate is matched, so a page with
+    no remaining candidates to check costs nothing) and is what actually
+    lets the vision-matching call do the real work of figuring out which
+    page a question's diagram is on, using the one thing that reliably
+    can — actually seeing it — instead of a proxy heuristic for it."""
     candidates = [
         (i, q) for i, q in enumerate(result.questions)
         if q.image_url is None and _DIAGRAM_REFERENCE_PATTERN.search(q.prompt_text)
@@ -1257,17 +1292,13 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        page_texts = [page.get_text() for page in doc]
     except Exception:
         return
 
-    by_page: dict[int, list[tuple[int, ExtractedQuestion]]] = {}
-    for i, q in candidates:
-        page_index = _best_matching_page(q.prompt_text, page_texts)
-        if page_index is not None:
-            by_page.setdefault(page_index, []).append((i, q))
-
-    for page_index, page_candidates in by_page.items():
+    remaining = list(candidates)  # (original_index, ExtractedQuestion), shrinks as pages claim matches
+    for page_index in range(len(doc)):
+        if not remaining:
+            break
         # Isolated per page, not one try/except around the whole loop — a
         # problem on one page (e.g. a degenerate clip rect) must not abort
         # processing for every other page too, especially important here
@@ -1291,13 +1322,17 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
             ]
             if not crops:
                 continue
-            questions_text = [q.prompt_text for _, q in page_candidates]
+            questions_text = [q.prompt_text for _, q in remaining]
             matches = _match_diagrams_for_page(client, questions_text, crops)
+            matched_local_indices = set()
             for local_qi, image_index in matches:
-                original_index = page_candidates[local_qi][0]
+                original_index, _ = remaining[local_qi]
                 key = f"fallback://p{page_index}-r{image_index}.png"
                 result.images[key] = crops[image_index]
                 result.questions[original_index].image_url = key
+                matched_local_indices.add(local_qi)
+            if matched_local_indices:
+                remaining = [rq for i, rq in enumerate(remaining) if i not in matched_local_indices]
         except Exception:
             continue
 
