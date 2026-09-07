@@ -1216,6 +1216,101 @@ Respond with a JSON object of exactly this shape, no prose:
 {"matches": [{"question_index": 0, "image_index": 1}]}
 """
 
+_DIAGRAM_ISOLATE_SYSTEM_PROMPT = """You are given a cropped image from a math worksheet PDF page. The crop
+was pulled around a question's diagram/figure, but on some worksheets each question's whole content block
+(diagram, prompt text, and multiple-choice options) is embedded as one single flat image by the PDF's own
+generator, stacked vertically in this fixed order: the diagram/figure first, then the question's prompt
+text, then its answer choices (A/B/C/D/etc.) last. So the crop can include all of that stacked together
+instead of just the figure.
+
+Your only job: find the pixel row (measuring down from the top, y=0) below which nothing but prompt text
+and/or answer choices remains — i.e. the diagram's own bottom edge. Do NOT try to crop left/right; only the
+vertical cutoff matters. It is much worse to cut off any part of the actual diagram (a line, label, tick
+mark, or angle mark) than to leave in a line or two of adjacent text below it — if you are ever unsure
+exactly where the diagram ends, choose a lower (larger) y value than you think you need.
+
+Respond with strict JSON, no prose: {"has_diagram": true, "y1": int} (y1 is a pixel row in the given image,
+measuring down from the top) or {"has_diagram": false} if this crop turns out to be text-only after all."""
+
+
+def _isolate_diagram_subregion(
+    client: OpenAI, page, region, render_dpi: int, crop_bytes: bytes
+) -> bytes:
+    """Best-effort tighter re-crop of a matched diagram region, for worksheets
+    that embed a question's whole content block (diagram + text + options) as
+    one flat image — confirmed on a real worksheet where every fallback match
+    was technically correct but visually dominated by redundant text/options
+    baked into the same crop, since get_image_info()'s bbox is the WHOLE
+    embedded object, not just the diagram inside it (that's a genuinely flat
+    raster, there's no further PDF-level structure to recover it from).
+
+    Deliberately asks for only a vertical (bottom-edge) cutoff, not a full
+    2D bounding box — an earlier version asked for the whole box and, tested
+    against this same real worksheet, clipped part of the actual diagram
+    twice out of six real cases (both times a two-triangle-side-by-side
+    figure, where the model underestimated the right edge). Every diagram on
+    this worksheet sits at the top of the block with text/options stacked
+    below it, never beside it, so never touching the left/right edges at all
+    makes horizontal clipping structurally impossible, not just less likely —
+    a full 2D box asks the model to get 4 numbers right under real risk,
+    a 1D cutoff only needs 1.
+
+    Re-renders (not just upscales) the tighter sub-region directly from the
+    PDF page at higher DPI, for a crisp result rather than a blown-up
+    re-encode of the coarser first-pass crop. Always falls back to the
+    original, already-known-correct crop_bytes on any failure or implausible
+    value — this is a quality refinement on top of an already-correct match,
+    never allowed to turn a working result into a broken one."""
+    try:
+        import fitz
+
+        b64 = base64.b64encode(crop_bytes).decode("ascii")
+        response = client.chat.completions.create(
+            model=EXTRACTION_MODEL,
+            response_format={"type": "json_object"},
+            temperature=0,
+            messages=[
+                {"role": "system", "content": _DIAGRAM_ISOLATE_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ],
+                },
+            ],
+        )
+        raw = json.loads(response.choices[0].message.content)
+        if not raw.get("has_diagram"):
+            return crop_bytes
+        py1 = raw["y1"]
+        if not isinstance(py1, (int, float)) or py1 <= 0:
+            return crop_bytes
+
+        # Generous downward padding (min 20px) — a false-generous cutoff (a
+        # little text bleed) is cosmetic; a false-tight one (a clipped
+        # diagram) is a correctness issue, so bias toward the former.
+        py1 = py1 + max(20.0, py1 * 0.15)
+
+        # Map the pixel cutoff (in the crop rendered at render_dpi from
+        # `region`, a fitz.Rect in PDF point space) back to point space —
+        # full original width preserved untouched, only the bottom moves.
+        scale = render_dpi / 72.0
+        sub_rect = fitz.Rect(region.x0, region.y0, region.x1, region.y0 + py1 / scale) & region
+        if sub_rect.is_empty or sub_rect.height < _MIN_REGION_DIMENSION_PT:
+            return crop_bytes
+        # Cutoff came out at (or past) the original region's own bottom —
+        # nothing to trim, the whole-block crop already the tightest we have.
+        if sub_rect.height >= region.height - 1.0:
+            return crop_bytes
+
+        sharper_dpi = min(300, render_dpi * 2)
+        pm = page.get_pixmap(clip=sub_rect, dpi=sharper_dpi)
+        if pm.width > _MAX_REGION_PIXELS or pm.height > _MAX_REGION_PIXELS:
+            pm = page.get_pixmap(clip=sub_rect, dpi=render_dpi)
+        return pm.tobytes("png")
+    except Exception:
+        return crop_bytes
+
 
 def _match_diagrams_for_page(client: OpenAI, questions_text: list[str], images: list[bytes]) -> list[tuple[int, int]]:
     """One vision call per page: which candidate image (if any) belongs to
@@ -1308,18 +1403,26 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
             regions = _detect_diagram_regions(page)
             if not regions:
                 continue
-            pixmaps = [page.get_pixmap(clip=r, dpi=_RENDER_DPI) for r in regions]
-            # Final, independent safety net on the actual rendered pixel
-            # size — redundant with _MAX_REGION_DIMENSION_PT's point-based
-            # cap during clustering, deliberately so: this checks the real
-            # rendered output rather than the geometry math that produced
-            # it, so it still catches a bad crop even if that earlier cap
-            # has a bug this code path can't be tested locally enough to
-            # rule out.
-            crops = [
-                pm.tobytes("png") for pm in pixmaps
-                if pm.width <= _MAX_REGION_PIXELS and pm.height <= _MAX_REGION_PIXELS
-            ]
+            # Filter regions and their rendered crops together, not crops
+            # alone — image_index below indexes into `crops`, and it must
+            # stay aligned with `kept_regions` (needed to map a match back to
+            # its source page-rect for the isolation re-crop below) or a
+            # dropped-for-size pixmap silently shifts every later index out
+            # of sync with the wrong region.
+            kept_regions = []
+            crops = []
+            for r in regions:
+                pm = page.get_pixmap(clip=r, dpi=_RENDER_DPI)
+                # Final, independent safety net on the actual rendered pixel
+                # size — redundant with _MAX_REGION_DIMENSION_PT's point-based
+                # cap during clustering, deliberately so: this checks the real
+                # rendered output rather than the geometry math that produced
+                # it, so it still catches a bad crop even if that earlier cap
+                # has a bug this code path can't be tested locally enough to
+                # rule out.
+                if pm.width <= _MAX_REGION_PIXELS and pm.height <= _MAX_REGION_PIXELS:
+                    kept_regions.append(r)
+                    crops.append(pm.tobytes("png"))
             if not crops:
                 continue
             questions_text = [q.prompt_text for _, q in remaining]
@@ -1327,8 +1430,11 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
             matched_local_indices = set()
             for local_qi, image_index in matches:
                 original_index, _ = remaining[local_qi]
+                final_bytes = _isolate_diagram_subregion(
+                    client, page, kept_regions[image_index], _RENDER_DPI, crops[image_index]
+                )
                 key = f"fallback://p{page_index}-r{image_index}.png"
-                result.images[key] = crops[image_index]
+                result.images[key] = final_bytes
                 result.questions[original_index].image_url = key
                 matched_local_indices.add(local_qi)
             if matched_local_indices:
