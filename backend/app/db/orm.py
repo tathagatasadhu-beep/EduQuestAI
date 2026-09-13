@@ -156,4 +156,8 @@ class StudentAssignment(Base):
     topic_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("topics.id", ondelete="CASCADE"), nullable=True
     )
+    # Half-open [active_from, active_until) window; either or both null means
+    # unbounded in that direction. See migration 009 for the full rationale.
+    active_from: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    active_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, server_default=func.now())

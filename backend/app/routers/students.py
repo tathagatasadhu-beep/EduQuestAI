@@ -22,9 +22,11 @@ from app.models.schemas import (
     AssignedTopicOut,
     AssignmentCreate,
     AssignmentOut,
+    AssignmentRolloverRequest,
     BadgeOut,
     LoginCodeOut,
     MasteryStat,
+    MonthlyProgressStat,
     StudentCreate,
     StudentCreateOut,
     StudentOut,
@@ -70,13 +72,47 @@ async def _mastery_for_student(db: AsyncSession, student_id: UUID) -> list[Maste
     ]
 
 
-async def _resolve_assigned_subjects(db: AsyncSession, student_id: UUID) -> list[tuple[Subject, list[Topic]]]:
+async def _fetch_assignment_rows(
+    db: AsyncSession, student_id: UUID, *, only_active: bool = True, as_of: datetime | None = None
+) -> list[StudentAssignment]:
+    """Raw assignment rows for a student. `only_active=True` (the default)
+    applies point-in-time filtering — active_from/active_until both null
+    means "always active" (every pre-month-picker row, and today's behavior
+    for anyone not using it); otherwise the row must currently be inside its
+    half-open [active_from, active_until) window. `only_active=False` (used
+    by badge-earning and, deliberately, nowhere else) ignores the window
+    entirely — see migration 009 for why that must not regress."""
+    stmt = select(StudentAssignment).where(StudentAssignment.student_id == student_id)
+    if only_active:
+        moment = as_of or datetime.now(timezone.utc)
+        stmt = stmt.where(
+            (StudentAssignment.active_from.is_(None)) | (StudentAssignment.active_from <= moment),
+            (StudentAssignment.active_until.is_(None)) | (StudentAssignment.active_until > moment),
+        )
+    return (await db.execute(stmt)).scalars().all()
+
+
+async def _fetch_overlapping_rows(
+    db: AsyncSession, student_id: UUID, active_from: datetime, active_until: datetime
+) -> list[StudentAssignment]:
+    """Assignment rows whose own window overlaps the requested
+    [active_from, active_until) range at all — used for "what was in scope
+    at any point during this period," e.g. the progress view. Standard
+    half-open interval overlap test, NULL treated as +/-infinity."""
+    stmt = select(StudentAssignment).where(
+        StudentAssignment.student_id == student_id,
+        (StudentAssignment.active_from.is_(None)) | (StudentAssignment.active_from < active_until),
+        (StudentAssignment.active_until.is_(None)) | (StudentAssignment.active_until > active_from),
+    )
+    return (await db.execute(stmt)).scalars().all()
+
+
+async def _expand_to_subject_topics(
+    db: AsyncSession, rows: list[StudentAssignment]
+) -> list[tuple[Subject, list[Topic]]]:
     """A `topic_id=null` assignment row means "whole subject" — expands to every
     topic under it. A subject with any specific-topic rows only includes those
     topics, even if a whole-subject row doesn't also exist for it."""
-    rows = (
-        await db.execute(select(StudentAssignment).where(StudentAssignment.student_id == student_id))
-    ).scalars().all()
     if not rows:
         return []
 
@@ -106,6 +142,64 @@ async def _resolve_assigned_subjects(db: AsyncSession, student_id: UUID) -> list
     return result
 
 
+async def _resolve_assigned_subjects(db: AsyncSession, student_id: UUID) -> list[tuple[Subject, list[Topic]]]:
+    """Currently-active assignments (point-in-time), expanded to
+    (subject, topics) pairs. This is what the student's Practice/My Subjects
+    picker reads — the one place where the active window actually narrows
+    what's shown, fixing the "everything ever assigned stays visible
+    forever" problem migration 009 was added for."""
+    rows = await _fetch_assignment_rows(db, student_id, only_active=True)
+    return await _expand_to_subject_topics(db, rows)
+
+
+async def _upsert_assignment(
+    db: AsyncSession,
+    student_id: UUID,
+    subject_id: UUID,
+    topic_id: UUID | None,
+    active_from: datetime | None,
+    active_until: datetime | None,
+) -> StudentAssignment:
+    """Create-or-return on the full (student, subject, topic, active_from,
+    active_until) key — deliberately NOT just (student, subject, topic).
+
+    A given (subject, topic) can have a DIFFERENT row per distinct window: a
+    September row and an October row for the same topic are two separate
+    rows, not one row whose window gets moved. This is what makes the
+    progress view stay accurate for a past month after a parent rolls
+    forward to a new one — if re-assigning for October instead mutated
+    September's existing row in place, September's assignment set (and
+    therefore what "was in scope" for September's progress) would silently
+    change after the fact, even though the attempts happened in September.
+    Matching on the exact window keeps re-POSTing the *same* month idempotent
+    (no duplicate rows from an accidental double-click) while any genuinely
+    different window — including what rollover always requests — creates a
+    new row, preserving every prior month's assignment set as its own
+    permanent record."""
+    existing = (
+        await db.execute(
+            select(StudentAssignment).where(
+                StudentAssignment.student_id == student_id,
+                StudentAssignment.subject_id == subject_id,
+                StudentAssignment.topic_id == topic_id,
+                StudentAssignment.active_from == active_from,
+                StudentAssignment.active_until == active_until,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    assignment = StudentAssignment(
+        student_id=student_id, subject_id=subject_id, topic_id=topic_id,
+        active_from=active_from, active_until=active_until,
+    )
+    db.add(assignment)
+    await db.commit()
+    await db.refresh(assignment)
+    return assignment
+
+
 async def _badges_for_student(db: AsyncSession, student: Student) -> list[BadgeOut]:
     mastery = await _mastery_for_student(db, student.id)
     mastery_by_topic = {m.topic_id: m for m in mastery}
@@ -120,7 +214,11 @@ async def _badges_for_student(db: AsyncSession, student: Student) -> list[BadgeO
     ).scalar_one_or_none() is not None
     topic_mastered = any(m.total_first_attempts > 0 and m.accuracy_rate >= 80 for m in mastery)
 
-    assigned = await _resolve_assigned_subjects(db, student.id)
+    # only_active=False deliberately: a badge already earned (or earnable
+    # from history) shouldn't disappear just because this month's assignment
+    # window moved on — badges treat "assigned" as all-time, unlike Practice.
+    all_time_rows = await _fetch_assignment_rows(db, student.id, only_active=False)
+    assigned = await _expand_to_subject_topics(db, all_time_rows)
     subject_champion = False
     for _subject, topics in assigned:
         if not topics:
@@ -302,7 +400,8 @@ async def regenerate_login_code(
 def _assignment_out(a: StudentAssignment, subject_name: str, topic_name: str | None) -> AssignmentOut:
     return AssignmentOut(
         id=a.id, subject_id=a.subject_id, subject_name=subject_name,
-        topic_id=a.topic_id, topic_name=topic_name, created_at=a.created_at,
+        topic_id=a.topic_id, topic_name=topic_name,
+        active_from=a.active_from, active_until=a.active_until, created_at=a.created_at,
     )
 
 
@@ -343,22 +442,9 @@ async def create_assignment(
             raise HTTPException(status_code=404, detail="Topic not found in this subject.")
         topic_name = topic.name
 
-    existing = (
-        await db.execute(
-            select(StudentAssignment).where(
-                StudentAssignment.student_id == student_id,
-                StudentAssignment.subject_id == payload.subject_id,
-                StudentAssignment.topic_id == payload.topic_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return _assignment_out(existing, subject.name, topic_name)
-
-    assignment = StudentAssignment(student_id=student_id, subject_id=payload.subject_id, topic_id=payload.topic_id)
-    db.add(assignment)
-    await db.commit()
-    await db.refresh(assignment)
+    assignment = await _upsert_assignment(
+        db, student_id, payload.subject_id, payload.topic_id, payload.active_from, payload.active_until
+    )
     return _assignment_out(assignment, subject.name, topic_name)
 
 
@@ -381,6 +467,112 @@ async def delete_assignment(
         raise HTTPException(status_code=404, detail="Assignment not found.")
     await db.delete(assignment)
     await db.commit()
+
+
+@router.post("/{student_id}/assignments/rollover", response_model=list[AssignmentOut])
+async def rollover_assignments(
+    student_id: UUID,
+    payload: AssignmentRolloverRequest,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    """Copies today's currently-active assignment set forward onto a new
+    window (e.g. "repeat September's picks for October") — each row keeps
+    its original subject/topic shape (a whole-subject row stays a
+    whole-subject row) and is created via the same helper `create_assignment`
+    uses. The source rows (September's) are left completely untouched, so
+    September's progress view stays accurate after rolling forward; a second
+    rollover onto the same target window is idempotent (matches the existing
+    October row rather than duplicating it)."""
+    await _get_owned_student_or_404(db, student_id, parent_id)
+    source_rows = await _fetch_assignment_rows(db, student_id, only_active=True)
+    if not source_rows:
+        return []
+
+    subject_ids = {r.subject_id for r in source_rows}
+    topic_ids = {r.topic_id for r in source_rows if r.topic_id is not None}
+    subjects_by_id = {
+        s.id: s for s in (await db.execute(select(Subject).where(Subject.id.in_(subject_ids)))).scalars().all()
+    }
+    topics_by_id = {
+        t.id: t for t in (await db.execute(select(Topic).where(Topic.id.in_(topic_ids)))).scalars().all()
+    } if topic_ids else {}
+
+    results = []
+    for row in source_rows:
+        assignment = await _upsert_assignment(
+            db, student_id, row.subject_id, row.topic_id, payload.active_from, payload.active_until
+        )
+        subject_name = subjects_by_id[row.subject_id].name
+        topic_name = topics_by_id[row.topic_id].name if row.topic_id is not None else None
+        results.append(_assignment_out(assignment, subject_name, topic_name))
+    return results
+
+
+@router.get("/{student_id}/progress", response_model=list[MonthlyProgressStat])
+async def get_progress(
+    student_id: UUID,
+    active_from: datetime,
+    active_until: datetime,
+    db: AsyncSession = Depends(get_db),
+    parent_id: UUID = Depends(get_current_parent_id),
+):
+    """Progress for exactly what was assigned at any point during
+    [active_from, active_until) — one row per in-scope topic, 0 attempts if
+    the student hasn't touched it yet, so "assigned but not started" is
+    visible rather than silently omitted."""
+    await _get_owned_student_or_404(db, student_id, parent_id)
+    if active_from >= active_until:
+        raise HTTPException(status_code=400, detail="active_from must be before active_until.")
+
+    overlapping_rows = await _fetch_overlapping_rows(db, student_id, active_from, active_until)
+    assigned = await _expand_to_subject_topics(db, overlapping_rows)
+    if not assigned:
+        return []
+
+    topic_subject: dict[UUID, Subject] = {}
+    topic_names: dict[UUID, str] = {}
+    for subject, topics in assigned:
+        for t in topics:
+            topic_subject[t.id] = subject
+            topic_names[t.id] = t.name
+    topic_ids = list(topic_subject.keys())
+
+    stmt = (
+        select(
+            Topic.id.label("topic_id"),
+            Topic.name.label("topic_name"),
+            func.count(Attempt.id).label("total_first_attempts"),
+            func.sum(cast(Attempt.is_correct, Integer)).label("correct_first_attempts"),
+        )
+        .join(Question, Question.topic_id == Topic.id)
+        .join(Attempt, Attempt.question_id == Question.id)
+        .where(
+            Topic.id.in_(topic_ids),
+            Attempt.student_id == student_id,
+            Attempt.attempt_number == 1,
+            Attempt.answered_at >= active_from,
+            Attempt.answered_at < active_until,
+        )
+        .group_by(Topic.id, Topic.name)
+    )
+    attempt_rows = {r.topic_id: r for r in (await db.execute(stmt)).all()}
+
+    stats = []
+    for topic_id, subject in topic_subject.items():
+        topic_name = topic_names[topic_id]
+        r = attempt_rows.get(topic_id)
+        total = r.total_first_attempts if r else 0
+        correct = (r.correct_first_attempts or 0) if r else 0
+        stats.append(
+            MonthlyProgressStat(
+                topic_id=topic_id, topic_name=topic_name,
+                subject_id=subject.id, subject_name=subject.name,
+                total_first_attempts=total,
+                accuracy_rate=round(correct / total * 100, 1) if total else 0.0,
+            )
+        )
+    return stats
 
 
 @router.get("/{student_id}/badges", response_model=list[BadgeOut])

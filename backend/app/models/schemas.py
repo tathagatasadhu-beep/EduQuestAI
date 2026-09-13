@@ -6,7 +6,7 @@ as the API-facing contracts either way.
 from datetime import datetime
 from typing import Optional, Literal
 from uuid import UUID
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, model_validator
 
 
 class ParentSignup(BaseModel):
@@ -237,6 +237,17 @@ class TheoryPdfOut(BaseModel):
 class AssignmentCreate(BaseModel):
     subject_id: UUID
     topic_id: Optional[UUID] = None
+    # Half-open [active_from, active_until) window -- both null means "always
+    # active" (today's behavior, unchanged for anyone not using the month
+    # picker). See migration 009.
+    active_from: Optional[datetime] = None
+    active_until: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _validate_window(self) -> "AssignmentCreate":
+        if self.active_from is not None and self.active_until is not None and self.active_from >= self.active_until:
+            raise ValueError("active_from must be before active_until")
+        return self
 
 
 class AssignmentOut(BaseModel):
@@ -245,7 +256,29 @@ class AssignmentOut(BaseModel):
     subject_name: str
     topic_id: Optional[UUID] = None
     topic_name: Optional[str] = None
+    active_from: Optional[datetime] = None
+    active_until: Optional[datetime] = None
     created_at: datetime
+
+
+class AssignmentRolloverRequest(BaseModel):
+    active_from: datetime
+    active_until: datetime
+
+    @model_validator(mode="after")
+    def _validate_window(self) -> "AssignmentRolloverRequest":
+        if self.active_from >= self.active_until:
+            raise ValueError("active_from must be before active_until")
+        return self
+
+
+class MonthlyProgressStat(BaseModel):
+    topic_id: UUID
+    topic_name: str
+    subject_id: UUID
+    subject_name: str
+    total_first_attempts: int
+    accuracy_rate: float
 
 
 class ForgotPasswordRequest(BaseModel):

@@ -63,7 +63,19 @@ export type Assignment = {
   subject_name: string;
   topic_id: string | null;
   topic_name: string | null;
+  // Half-open [active_from, active_until) window; both null = always active.
+  active_from: string | null;
+  active_until: string | null;
   created_at: string;
+};
+
+export type MonthlyProgressStat = {
+  topic_id: string;
+  topic_name: string;
+  subject_id: string;
+  subject_name: string;
+  total_first_attempts: number;
+  accuracy_rate: number;
 };
 
 export type AssignedTopic = { id: string; name: string; sort_order: number };
@@ -188,7 +200,11 @@ export const api = {
     request<MasteryStat[]>(`/api/students/${studentId}/mastery`, { token }),
   listAssignments: (token: string, studentId: string) =>
     request<Assignment[]>(`/api/students/${studentId}/assignments`, { token }),
-  createAssignment: (token: string, studentId: string, data: { subject_id: string; topic_id?: string | null }) =>
+  createAssignment: (
+    token: string,
+    studentId: string,
+    data: { subject_id: string; topic_id?: string | null; active_from?: string | null; active_until?: string | null }
+  ) =>
     request<Assignment>(`/api/students/${studentId}/assignments`, {
       method: "POST",
       token,
@@ -197,6 +213,18 @@ export const api = {
     }),
   deleteAssignment: (token: string, studentId: string, assignmentId: string) =>
     request<void>(`/api/students/${studentId}/assignments/${assignmentId}`, { method: "DELETE", token }),
+  rolloverAssignments: (token: string, studentId: string, data: { active_from: string; active_until: string }) =>
+    request<Assignment[]>(`/api/students/${studentId}/assignments/rollover`, {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  getProgress: (token: string, studentId: string, params: { active_from: string; active_until: string }) =>
+    request<MonthlyProgressStat[]>(
+      `/api/students/${studentId}/progress?active_from=${encodeURIComponent(params.active_from)}&active_until=${encodeURIComponent(params.active_until)}`,
+      { token }
+    ),
 
   // --- students (self-scoped) ---
   getMyProfile: (token: string) => request<Student>("/api/students/me", { token }),

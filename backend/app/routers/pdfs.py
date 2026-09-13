@@ -264,6 +264,9 @@ async def list_theory_pdfs_for_student(
         subject_id = topic.subject_id
 
     student_id = student["student_id"]
+    # Deliberately ignores active_from/active_until (migration 009) — this is
+    # an access-control gate, not the Practice picker, and theory-material
+    # access shouldn't lapse just because this month's assignment window did.
     assigned = (
         await db.execute(
             select(StudentAssignment.id)

@@ -1,0 +1,24 @@
+-- EduQuestAI: parent feedback -- once several subjects/topics had been
+-- assigned to a student over a few months, the assigned set only ever grew,
+-- so the student's Practice picker stayed cluttered with everything ever
+-- assigned instead of reflecting what's actually the current focus. This
+-- lets a parent scope an assignment to a specific window (e.g. "September
+-- 2026") instead of it being permanent forever, and lets the parent view
+-- progress against exactly what was in scope for a given period.
+--
+-- Half-open interval: active_until is the first instant AFTER the window
+-- ends (e.g. assigning for September = active_from 2026-09-01T00:00Z,
+-- active_until 2026-10-01T00:00Z), not the last instant of the window --
+-- avoids off-by-one bugs comparing against a "last day of month" value.
+--
+-- Nullable, no backfill -- every existing row (and any new assignment made
+-- without picking a month) has active_from/active_until both null, meaning
+-- "always active," so nothing currently assigned changes behavior until a
+-- parent actively uses the new month picker. Consumed by
+-- backend/app/routers/students.py (get_my_assigned_subjects, the new
+-- assignments/rollover and progress endpoints) -- badge-earning
+-- (_badges_for_student) and theory-PDF access
+-- (pdfs.py::list_theory_pdfs_for_student) deliberately keep treating
+-- "assigned" as all-time and are NOT filtered by this window.
+alter table student_assignments add column active_from timestamptz;
+alter table student_assignments add column active_until timestamptz;
