@@ -1443,6 +1443,35 @@ def _apply_missing_diagram_fallback(pdf_bytes: bytes, result: ExtractionResult) 
             continue
 
 
+def _strip_nul(value):
+    """Recursively remove NUL (0x00) characters from every string in a
+    str/list/dict structure. Postgres text columns reject NUL outright
+    (asyncpg CharacterNotInRepertoireError: invalid byte sequence for
+    encoding "UTF8": 0x00), and OCR output or an LLM response on a large,
+    messy PDF can contain one — confirmed on a real upload
+    (psat-8-9-practice-test-1.pdf), where a single stray NUL in one
+    question failed the whole worksheet's insert."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_strip_nul(v) for v in value]
+    if isinstance(value, dict):
+        return {_strip_nul(k): _strip_nul(v) for k, v in value.items()}
+    return value
+
+
+def _sanitize_result(result: ExtractionResult) -> None:
+    result.subject_guess = _strip_nul(result.subject_guess)
+    result.ocr_text = _strip_nul(result.ocr_text)
+    for q in result.questions:
+        q.prompt_text = _strip_nul(q.prompt_text)
+        q.prompt_latex = _strip_nul(q.prompt_latex)
+        q.options = _strip_nul(q.options)
+        q.topic_guess = _strip_nul(q.topic_guess)
+        q.difficulty_guess = _strip_nul(q.difficulty_guess)
+        q.number_line_answer = _strip_nul(q.number_line_answer)
+
+
 def run_pipeline(pdf_bytes: bytes, filename: str) -> ExtractionResult:
     """Entry point called by the background job triggered from pdfs.upload_pdf."""
     ocr_text = ocr_pdf(pdf_bytes, filename)
@@ -1450,4 +1479,5 @@ def run_pipeline(pdf_bytes: bytes, filename: str) -> ExtractionResult:
     result = extract_questions(ocr_text, secondary_ocr_text)
     result.images = _download_images(_extract_image_urls(ocr_text))
     _apply_missing_diagram_fallback(pdf_bytes, result)
+    _sanitize_result(result)
     return result
