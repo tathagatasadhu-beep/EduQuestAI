@@ -28,8 +28,20 @@ class ParentOut(BaseModel):
 
 class AuthToken(BaseModel):
     access_token: str
+    # Supabase access tokens live ~1 hour; the frontend keeps this to mint a
+    # fresh one via POST /api/auth/parent/refresh instead of forcing a re-login.
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     user: ParentOut
+
+
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class TokenRefreshOut(BaseModel):
+    access_token: str
+    refresh_token: str
 
 
 class StudentLoginRequest(BaseModel):

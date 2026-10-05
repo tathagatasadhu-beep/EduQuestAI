@@ -1,4 +1,4 @@
-import { setParentToken } from "@/lib/session";
+import { setParentTokens } from "@/lib/session";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
@@ -19,6 +19,6 @@ export async function POST(req: Request) {
     return Response.json({ error: data.detail || "Signup failed." }, { status: res.status });
   }
 
-  await setParentToken(data.access_token);
+  await setParentTokens(data.access_token, data.refresh_token);
   return Response.json({ user: data.user });
 }

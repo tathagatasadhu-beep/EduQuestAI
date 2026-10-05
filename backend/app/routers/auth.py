@@ -33,6 +33,8 @@ from app.models.schemas import (
     StudentAuthToken,
     StudentLoginRequest,
     StudentOut,
+    TokenRefreshOut,
+    TokenRefreshRequest,
 )
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
@@ -90,6 +92,7 @@ async def parent_signup(payload: ParentSignup, db: AsyncSession = Depends(get_db
 
     return AuthToken(
         access_token=result.session.access_token,
+        refresh_token=result.session.refresh_token,
         user=ParentOut(id=user.id, email=user.email, full_name=user.full_name),
     )
 
@@ -101,6 +104,8 @@ async def parent_login(payload: ParentLogin, db: AsyncSession = Depends(get_db))
         result = supabase.auth.sign_in_with_password({"email": payload.email, "password": payload.password})
     except AuthApiError as exc:
         raise HTTPException(status_code=401, detail="Invalid email or password.") from exc
+    except Exception as exc:  # e.g. Supabase project paused/unreachable — not a credentials problem
+        raise HTTPException(status_code=503, detail="Login service is unreachable. Please try again shortly.") from exc
 
     parent_id = UUID(result.user.id)
     row = await db.execute(select(User).where(User.id == parent_id))
@@ -114,7 +119,30 @@ async def parent_login(payload: ParentLogin, db: AsyncSession = Depends(get_db))
 
     return AuthToken(
         access_token=result.session.access_token,
+        refresh_token=result.session.refresh_token,
         user=ParentOut(id=user.id, email=user.email, full_name=user.full_name),
+    )
+
+
+@router.post("/parent/refresh", response_model=TokenRefreshOut)
+async def parent_refresh(payload: TokenRefreshRequest):
+    """Exchange a Supabase refresh token for a fresh access token (and the
+    rotated refresh token). Called by the frontend proxy when the access
+    token it holds is expired or about to be, so a parent isn't bounced to the
+    login page — or hit with "Signature has expired" mid-upload — every hour."""
+    supabase = get_supabase()
+    try:
+        result = supabase.auth.refresh_session(payload.refresh_token)
+    except AuthApiError as exc:
+        raise HTTPException(status_code=401, detail="Session expired — please log in again.") from exc
+    except Exception as exc:  # network/DNS failure reaching Supabase, not a bad token
+        raise HTTPException(status_code=503, detail="Auth service unreachable.") from exc
+
+    if result.session is None:
+        raise HTTPException(status_code=401, detail="Session expired — please log in again.")
+    return TokenRefreshOut(
+        access_token=result.session.access_token,
+        refresh_token=result.session.refresh_token,
     )
 
 

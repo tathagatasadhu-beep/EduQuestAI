@@ -44,7 +44,12 @@ async function request<T>(
 }
 
 export type ParentProfile = { id: string; email: string; full_name: string };
-export type AuthToken = { access_token: string; token_type: string; user: ParentProfile };
+export type AuthToken = {
+  access_token: string;
+  refresh_token?: string | null;
+  token_type: string;
+  user: ParentProfile;
+};
 
 export type Student = {
   id: string;
